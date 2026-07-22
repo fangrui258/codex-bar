@@ -1,0 +1,24 @@
+namespace CodexBar;
+
+internal static class Program
+{
+    [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
+
+    [STAThread]
+    private static void Main()
+    {
+        _ = SetCurrentProcessExplicitAppUserModelID("CodexBar.Desktop");
+        ApplicationConfiguration.Initialize();
+        using var mutex = new Mutex(true, "Local\\CodexBar.SingleInstance", out var firstInstance);
+        if (!firstInstance)
+        {
+            MessageBox.Show("CodexBar is already running in the notification area.", "CodexBar",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        Application.Run(new WidgetForm());
+        GC.KeepAlive(mutex);
+    }
+}
