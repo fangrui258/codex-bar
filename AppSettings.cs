@@ -71,6 +71,7 @@ internal sealed class AppSettings
 
     public void Save()
     {
+        string? temporaryPath = null;
         try
         {
             if (!string.Equals(SmtpPassword, lastProtectedPassword, StringComparison.Ordinal))
@@ -79,10 +80,26 @@ internal sealed class AppSettings
                 lastProtectedPassword = SmtpPassword;
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
-            File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this));
+            var directory = Path.GetDirectoryName(SettingsPath)!;
+            Directory.CreateDirectory(directory);
+            temporaryPath = Path.Combine(directory, $"settings-{Guid.NewGuid():N}.tmp");
+            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(this));
+
+            if (File.Exists(SettingsPath))
+                File.Replace(temporaryPath, SettingsPath, destinationBackupFileName: null);
+            else
+                File.Move(temporaryPath, SettingsPath);
         }
         catch { /* A display preference should never crash the widget. */ }
+        finally
+        {
+            if (temporaryPath is not null)
+            {
+                try { File.Delete(temporaryPath); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+        }
     }
 
     private static string Protect(string value)
