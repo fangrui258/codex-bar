@@ -29,7 +29,7 @@ internal sealed class CodexAppServerClient : IDisposable
                 var response = await SendRequestAsync("account/rateLimits/read");
                 return ParseWeekly(response);
             }
-            catch (Exception ex) when (ex is IOException or JsonException or InvalidOperationException or TimeoutException)
+            catch (Exception ex) when (ex is IOException or JsonException or TimeoutException)
             {
                 firstFailure ??= ex;
                 StopProcess();
