@@ -21,7 +21,6 @@ internal sealed class WidgetForm : Form
     private readonly NotifyIcon trayIcon;
     private readonly System.Windows.Forms.Timer refreshTimer;
     private readonly System.Windows.Forms.Timer positionSaveTimer;
-    private readonly System.Windows.Forms.Timer freshnessTimer;
     private readonly SemaphoreSlim refreshGate = new(1, 1);
     private readonly Pen borderPen = new(Color.FromArgb(42, 58, 49));
     private readonly Pen controlPen = new(Color.FromArgb(130, 150, 138), 1.2f);
@@ -86,9 +85,6 @@ internal sealed class WidgetForm : Form
             positionSaveTimer.Stop();
             SavePositionNow();
         };
-        freshnessTimer = new System.Windows.Forms.Timer { Interval = 5_000 };
-        freshnessTimer.Tick += (_, _) => Invalidate();
-        freshnessTimer.Start();
 
         Shown += async (_, _) => await RefreshUsageAsync();
         LocationChanged += (_, _) => QueuePositionSave();
@@ -591,7 +587,6 @@ internal sealed class WidgetForm : Form
             return;
         }
         refreshTimer.Stop();
-        freshnessTimer.Stop();
         FlushPositionSave();
         trayIcon.Visible = false;
     }
@@ -632,7 +627,6 @@ internal sealed class WidgetForm : Form
             liveClient.Dispose();
             refreshTimer.Dispose();
             positionSaveTimer.Dispose();
-            freshnessTimer.Dispose();
             trayIcon.Dispose();
             appIcon.Dispose();
             borderPen.Dispose();
