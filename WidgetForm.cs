@@ -27,6 +27,8 @@ internal sealed class WidgetForm : Form
     private readonly Font titleFont = new("Segoe UI Semibold", 8.5f);
     private readonly Font percentFont = new("Segoe UI Semibold", 25f);
     private readonly Font resetFont = new("Segoe UI", 9f);
+    private readonly Font compactResetFont = new("Segoe UI", 7.5f);
+    private readonly Font denseResetFont = new("Segoe UI", 6.5f);
     private readonly SolidBrush dimBrush = new(Color.FromArgb(143, 160, 150));
     private readonly SolidBrush statusOkBrush = new(Color.FromArgb(84, 235, 120));
     private readonly SolidBrush statusOfflineBrush = new(Color.FromArgb(239, 128, 128));
@@ -123,11 +125,7 @@ internal sealed class WidgetForm : Form
         usageBrush.Color = color;
         g.DrawString($"{remainingPercent:0}%", percentFont, usageBrush, 14, 33);
 
-        var localReset = snapshot.ResetsAt.ToLocalTime();
-        var resetText = localReset.Date == DateTimeOffset.Now.Date
-            ? $"Resets today · {localReset:h:mm tt}"
-            : $"Resets {localReset:ddd, MMM d} · {localReset:h:mm tt}";
-        g.DrawString(resetText, resetFont, textBrush, 104, 41);
+        DrawResetSchedule(g, snapshot);
         DrawProgress(g, remainingPercent, color);
     }
 
@@ -231,8 +229,17 @@ internal sealed class WidgetForm : Form
         }
         menu.Items.Add(opacity);
 
-        var topmost = new ToolStripMenuItem("Always on top") { CheckOnClick = true, Checked = settings.AlwaysOnTop };
-        topmost.CheckedChanged += (_, _) => { settings.AlwaysOnTop = TopMost = topmost.Checked; settings.Save(); };
+        var topmost = new ToolStripMenuItem($"Always on top — {(settings.AlwaysOnTop ? "On" : "Off")}")
+        {
+            CheckOnClick = true,
+            Checked = settings.AlwaysOnTop
+        };
+        topmost.CheckedChanged += (_, _) =>
+        {
+            settings.AlwaysOnTop = TopMost = topmost.Checked;
+            topmost.Text = $"Always on top — {(topmost.Checked ? "On" : "Off")}";
+            settings.Save();
+        };
         menu.Items.Add(topmost);
 
         var startup = new ToolStripMenuItem("Start with Windows") { CheckOnClick = true, Checked = AppSettings.StartsWithWindows };
@@ -447,6 +454,38 @@ internal sealed class WidgetForm : Form
         g.DrawLine(controlPen, Width - 12, 13, Width - 20, 21);
     }
 
+    private void DrawResetSchedule(Graphics g, UsageSnapshot usage)
+    {
+        var reset = usage.ResetsAt.ToLocalTime();
+        if (usage.ResetExpirations.Count == 0)
+        {
+            var resetText = reset.Date == DateTimeOffset.Now.Date
+                ? $"Resets today · {reset:h:mm tt}"
+                : $"Resets {reset:ddd, MMM d} · {reset:h:mm tt}";
+            g.DrawString(resetText, resetFont, textBrush, 104, 41);
+            return;
+        }
+
+        var lines = new List<string>
+        {
+            $"Resets {reset:ddd, MMM d} - {reset:h:mm tt}"
+        };
+        lines.AddRange(usage.ResetExpirations.Select(expiration =>
+        {
+            var localExpiration = expiration.ToLocalTime();
+            return $"Reset expires {localExpiration:ddd, MMM d} - {localExpiration:h:mm tt}";
+        }));
+
+        var font = lines.Count <= 3 ? compactResetFont : denseResetFont;
+        var lineHeight = Math.Min(14f, 44f / lines.Count);
+        var y = 31f;
+        foreach (var line in lines)
+        {
+            g.DrawString(line, font, textBrush, 104, y);
+            y += lineHeight;
+        }
+    }
+
     private void DrawProgress(Graphics g, double percent, Color color)
     {
         var track = new Rectangle(16, Height - 17, Width - 32, 4);
@@ -510,7 +549,8 @@ internal sealed class WidgetForm : Form
         var test = new UsageSnapshot(
             0,
             DateTimeOffset.UtcNow.AddHours(24),
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            Array.Empty<DateTimeOffset>());
         return SendUsageLimitEmailAsync(test, isTest: true, forceSend: true);
     }
 
@@ -668,6 +708,8 @@ internal sealed class WidgetForm : Form
             titleFont.Dispose();
             percentFont.Dispose();
             resetFont.Dispose();
+            compactResetFont.Dispose();
+            denseResetFont.Dispose();
             dimBrush.Dispose();
             statusOkBrush.Dispose();
             statusOfflineBrush.Dispose();

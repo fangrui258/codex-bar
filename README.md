@@ -10,6 +10,7 @@ CodexBar shows the percentage of your weekly Codex capacity that remains and the
 
 - Shows **weekly capacity remaining**, not usage consumed
 - Displays the next reset in your local date and time
+- Lists the exact expiration time of each available banked rate-limit reset
 - Changes from green to amber to red as capacity runs low
 - Refreshes automatically at a configurable interval
 - Minimizes to the Windows notification area
@@ -98,7 +99,7 @@ CodexBar uses the authenticated Codex installation already on your computer:
 2. Calls the supported `account/rateLimits/read` method at the selected refresh interval. Codex owns authentication, token refresh, and the upstream request.
 3. Selects the account-wide `codex` limit, ignoring separate model-specific pools.
 4. Finds the seven-day window (`10080` minutes), whether Codex reports it as the primary or secondary limit.
-5. Displays `100 − used_percent` and converts the reset into your local time zone.
+5. Displays `100 − used_percent`, the weekly reset, and any available banked-reset expirations in your local time zone.
 
 This means CodexBar does not scrape the UI, automate a browser, read authentication tokens directly, or maintain a second login. A 15-second refresh interval performs a real authenticated rate-limit read every 15 seconds. If a request fails, the widget clearly labels the last successful live value as **Offline** while it retries.
 

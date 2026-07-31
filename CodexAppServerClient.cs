@@ -4,7 +4,11 @@ using System.Text.Json;
 
 namespace CodexBar;
 
-internal sealed record UsageSnapshot(double UsedPercent, DateTimeOffset ResetsAt, DateTimeOffset CapturedAt);
+internal sealed record UsageSnapshot(
+    double UsedPercent,
+    DateTimeOffset ResetsAt,
+    DateTimeOffset CapturedAt,
+    IReadOnlyList<DateTimeOffset> ResetExpirations);
 
 internal sealed class CodexAppServerClient : IDisposable
 {
@@ -154,11 +158,41 @@ internal sealed class CodexAppServerClient : IDisposable
             if (!window.TryGetProperty("usedPercent", out var used) || !used.TryGetDouble(out var percent) ||
                 !window.TryGetProperty("resetsAt", out var reset) || !reset.TryGetInt64(out var unixReset)) continue;
 
-            return new UsageSnapshot(Math.Clamp(percent, 0, 100),
-                DateTimeOffset.FromUnixTimeSeconds(unixReset), DateTimeOffset.UtcNow);
+            return new UsageSnapshot(
+                Math.Clamp(percent, 0, 100),
+                DateTimeOffset.FromUnixTimeSeconds(unixReset),
+                DateTimeOffset.UtcNow,
+                ParseResetCreditExpirations(result));
         }
 
         throw new InvalidOperationException("Codex returned no weekly rate-limit window.");
+    }
+
+    private static IReadOnlyList<DateTimeOffset> ParseResetCreditExpirations(JsonElement result)
+    {
+        if (!result.TryGetProperty("rateLimitResetCredits", out var summary) ||
+            summary.ValueKind != JsonValueKind.Object ||
+            !summary.TryGetProperty("credits", out var credits) ||
+            credits.ValueKind != JsonValueKind.Array)
+            return Array.Empty<DateTimeOffset>();
+
+        var expirations = new List<DateTimeOffset>();
+        foreach (var credit in credits.EnumerateArray())
+        {
+            if (credit.ValueKind != JsonValueKind.Object ||
+                !credit.TryGetProperty("status", out var status) ||
+                status.ValueKind != JsonValueKind.String ||
+                !string.Equals(status.GetString(), "available", StringComparison.OrdinalIgnoreCase) ||
+                !credit.TryGetProperty("expiresAt", out var expiresAt) ||
+                !expiresAt.TryGetInt64(out var unixExpiration))
+                continue;
+
+            try { expirations.Add(DateTimeOffset.FromUnixTimeSeconds(unixExpiration)); }
+            catch (ArgumentOutOfRangeException) { }
+        }
+
+        expirations.Sort();
+        return expirations;
     }
 
     private static List<string> FindCodexExecutables()
