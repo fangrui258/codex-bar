@@ -38,6 +38,7 @@ internal sealed class WidgetForm : Form
     private string? readError;
     private bool exiting;
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("user32.dll")]
     private static extern bool DestroyIcon(IntPtr handle);
 
