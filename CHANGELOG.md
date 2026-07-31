@@ -2,6 +2,14 @@
 
 All notable changes to CodexBar are documented here.
 
+## [Unreleased]
+
+## [1.1.1] - 2026-07-31
+
+- Makes the Start with Windows status explicit in the tray menu.
+- Adds notification setup guidance for Gmail app passwords and carrier email-to-text addresses.
+- Clarifies that the configured refresh interval controls the real rate-limit request frequency.
+
 ## [1.1.0] - 2026-07-31
 
 ### Added
@@ -25,5 +33,7 @@ All notable changes to CodexBar are documented here.
 - Live weekly Codex capacity and reset-time display.
 - Configurable refresh interval, transparency, always-on-top mode, Windows startup, and notification-area support.
 
+[Unreleased]: https://github.com/jspann21/codex-bar/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/jspann21/codex-bar/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/jspann21/codex-bar/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/jspann21/codex-bar/releases/tag/v1.0.0

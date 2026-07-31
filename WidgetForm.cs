@@ -242,11 +242,17 @@ internal sealed class WidgetForm : Form
         };
         menu.Items.Add(topmost);
 
-        var startup = new ToolStripMenuItem("Start with Windows") { CheckOnClick = true, Checked = AppSettings.StartsWithWindows };
+        var startsWithWindows = AppSettings.StartsWithWindows;
+        var startup = new ToolStripMenuItem($"Start with Windows — {(startsWithWindows ? "On" : "Off")}")
+        {
+            CheckOnClick = true,
+            Checked = startsWithWindows
+        };
         startup.Click += (_, _) =>
         {
             try { AppSettings.StartsWithWindows = startup.Checked; }
             catch { startup.Checked = !startup.Checked; }
+            startup.Text = $"Start with Windows — {(startup.Checked ? "On" : "Off")}";
         };
         menu.Items.Add(startup);
         menu.Items.Add("Usage notifications…", null, (_, _) => ShowNotificationSettings());

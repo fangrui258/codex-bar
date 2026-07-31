@@ -91,6 +91,17 @@ Preferences are stored at:
 %LOCALAPPDATA%\CodexBar\settings.json
 ```
 
+## Notifications
+
+CodexBar can notify you by email when weekly capacity resets to fully available. Open **Usage notifications…** from the tray menu, enter a notification address, and choose one of these delivery methods:
+
+- **Automatic SMTP delivery:** enter your mail provider's SMTP details. CodexBar sends one message automatically when it observes the weekly usage return to zero.
+- **Default mail app:** leave the SMTP fields blank. CodexBar opens a prefilled draft addressed to your notification address; you review and send it yourself.
+
+You may be able to receive the alert as a text by using an email-to-SMS or email-to-MMS address supplied by your mobile carrier. Ask your carrier or search its official support site for **email-to-text gateway** and your plan name. The address is often based on your full phone number and a carrier-specific domain, but formats and availability vary. Send a normal test email to the address first, then use **Send test alert** in CodexBar. Do not rely on this method for urgent alerts: carriers may filter these messages or discontinue their gateways—for example, [Verizon is retiring its legacy email-to-text service](https://www.verizon.com/support/vtext-vzwpix-shutdown/).
+
+For Gmail SMTP, use `smtp.gmail.com`, port `587`, enable SSL/TLS, and enter your full Gmail address as the SMTP user. Google requires 2-Step Verification before you can [create a 16-digit app password](https://support.google.com/mail/answer/185833?hl=en); use that app password in CodexBar instead of your normal Google password. The app-password option may be unavailable for some managed, security-key-only, or Advanced Protection accounts.
+
 ## How it works
 
 CodexBar uses the authenticated Codex installation already on your computer:
@@ -101,7 +112,7 @@ CodexBar uses the authenticated Codex installation already on your computer:
 4. Finds the seven-day window (`10080` minutes), whether Codex reports it as the primary or secondary limit.
 5. Displays `100 − used_percent`, the weekly reset, and any available banked-reset expirations in your local time zone.
 
-This means CodexBar does not scrape the UI, automate a browser, read authentication tokens directly, or maintain a second login. A 15-second refresh interval performs a real authenticated rate-limit read every 15 seconds. If a request fails, the widget clearly labels the last successful live value as **Offline** while it retries.
+This means CodexBar does not scrape the UI, automate a browser, read authentication tokens directly, or maintain a second login. The default refresh interval is 15 seconds, but you can change it from **Refresh interval** in the tray menu. Each selected interval performs a real authenticated rate-limit read—for example, selecting 5 seconds sends one read every 5 seconds, while selecting 5 minutes sends one every 5 minutes. If a request fails, the widget clearly labels the last successful live value as **Offline** while it retries.
 
 ## Privacy and security
 
