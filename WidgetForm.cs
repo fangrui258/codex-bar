@@ -326,7 +326,6 @@ internal sealed class WidgetForm : Form
         var save = new Button
         {
             Text = "Save",
-            DialogResult = DialogResult.OK,
             Location = new Point(445, 298),
             Width = 75,
             Height = 28
@@ -359,11 +358,29 @@ internal sealed class WidgetForm : Form
         dialog.AcceptButton = save;
         dialog.CancelButton = cancel;
 
-        if (dialog.ShowDialog(this) == DialogResult.OK)
+        save.Click += (_, _) =>
         {
             if (enabled.Checked && string.IsNullOrWhiteSpace(toInput.Text))
             {
-                MessageBox.Show(this, "Notification email is required when notifications are enabled.", "Validation", MessageBoxButtons.OK,
+                MessageBox.Show(dialog, "Notification email is required when notifications are enabled.", "Validation", MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            MailAddress? toAddress = null;
+            if (!string.IsNullOrWhiteSpace(toInput.Text) &&
+                !MailAddress.TryCreate(toInput.Text.Trim(), out toAddress))
+            {
+                MessageBox.Show(dialog, "Enter a valid notification email address.", "Validation", MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            MailAddress? fromAddress = null;
+            if (!string.IsNullOrWhiteSpace(fromInput.Text) &&
+                !MailAddress.TryCreate(fromInput.Text.Trim(), out fromAddress))
+            {
+                MessageBox.Show(dialog, "Enter a valid From address.", "Validation", MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
                 return;
             }
@@ -372,7 +389,7 @@ internal sealed class WidgetForm : Form
             {
                 if (!int.TryParse(portInput.Text, out var parsedPort) || parsedPort is < 1 or > 65535)
                 {
-                    MessageBox.Show(this, "SMTP port must be a number between 1 and 65535.", "Validation", MessageBoxButtons.OK,
+                    MessageBox.Show(dialog, "SMTP port must be a number between 1 and 65535.", "Validation", MessageBoxButtons.OK,
                         MessageBoxIcon.Warning);
                     return;
                 }
@@ -380,15 +397,35 @@ internal sealed class WidgetForm : Form
                 settings.SmtpPort = parsedPort;
             }
 
+            var hasUser = !string.IsNullOrWhiteSpace(userInput.Text);
+            var hasPassword = !string.IsNullOrWhiteSpace(passwordInput.Text);
+            if (hasUser != hasPassword)
+            {
+                MessageBox.Show(dialog, "SMTP user and password must either both be filled in or both be blank.", "Validation",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (hasUser && !ssl.Checked)
+            {
+                MessageBox.Show(dialog, "SSL/TLS must be enabled when SMTP credentials are provided.", "Validation",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
             settings.NotifyOnUsageLimitReached = enabled.Checked;
-            settings.UsageLimitNotificationEmail = NormalizeOrNull(toInput.Text);
+            settings.UsageLimitNotificationEmail = toAddress?.Address;
             settings.SmtpHost = NormalizeOrNull(hostInput.Text);
             settings.SmtpUseSsl = ssl.Checked;
             settings.SmtpUser = NormalizeOrNull(userInput.Text);
             settings.SmtpPassword = NormalizeOrNull(passwordInput.Text);
-            settings.SmtpFromAddress = NormalizeOrNull(fromInput.Text);
+            settings.SmtpFromAddress = fromAddress?.Address;
             settings.Save();
-        }
+            dialog.DialogResult = DialogResult.OK;
+            dialog.Close();
+        };
+
+        dialog.ShowDialog(this);
     }
 
     private static string? NormalizeOrNull(string value)
@@ -508,11 +545,14 @@ internal sealed class WidgetForm : Form
     {
         try
         {
+            if (!MailAddress.TryCreate(toAddress, out var recipient))
+                return false;
+
             var subject = Uri.EscapeDataString(isTest
                 ? "TEST: Codex weekly capacity reset alert"
                 : "Codex weekly capacity is 100% available");
             var body = Uri.EscapeDataString(BuildNotificationBody(current, isTest));
-            var uri = $"mailto:{toAddress}?subject={subject}&body={body}";
+            var uri = $"mailto:{Uri.EscapeDataString(recipient.Address)}?subject={subject}&body={body}";
 
             Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
             return true;
@@ -540,13 +580,17 @@ internal sealed class WidgetForm : Form
                 Body = body
             };
 
-            var credentialsProvided = !string.IsNullOrWhiteSpace(settings.SmtpUser) &&
-                !string.IsNullOrWhiteSpace(settings.SmtpPassword);
+            var hasUser = !string.IsNullOrWhiteSpace(settings.SmtpUser);
+            var hasPassword = !string.IsNullOrWhiteSpace(settings.SmtpPassword);
+            if (hasUser != hasPassword || (hasUser && !settings.SmtpUseSsl))
+                return false;
+
+            var credentialsProvided = hasUser && hasPassword;
             using var client = new SmtpClient(smtpHost, Math.Clamp(settings.SmtpPort, 1, 65535))
             {
                 EnableSsl = settings.SmtpUseSsl,
                 DeliveryMethod = SmtpDeliveryMethod.Network,
-                UseDefaultCredentials = !credentialsProvided
+                UseDefaultCredentials = false
             };
 
             if (credentialsProvided)
