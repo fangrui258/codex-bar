@@ -22,7 +22,6 @@ internal sealed class AppSettings
     public string? ProtectedSmtpPassword { get; set; }
     public string? SmtpFromAddress { get; set; }
     public DateTimeOffset? LastUsageLimitNotificationResetAt { get; set; }
-    public DateTimeOffset? LastObservedWeeklyResetAt { get; set; }
     public double? LastObservedWeeklyUsedPercent { get; set; }
     public int? X { get; set; }
     public int? Y { get; set; }

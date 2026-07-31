@@ -476,13 +476,10 @@ internal sealed class WidgetForm : Form
         var becameFullyAvailable = previousUsedPercent.HasValue &&
             previousUsedPercent.Value > FullAvailabilityUsedPercent &&
             current.UsedPercent <= FullAvailabilityUsedPercent;
-        var observationChanged =
-            settings.LastObservedWeeklyResetAt != current.ResetsAt ||
-            settings.LastObservedWeeklyUsedPercent != current.UsedPercent;
+        var observationChanged = settings.LastObservedWeeklyUsedPercent != current.UsedPercent;
 
         // Persist changed observations first. If the app restarts, or notification
         // delivery fails, this transition cannot be handled a second time.
-        settings.LastObservedWeeklyResetAt = current.ResetsAt;
         settings.LastObservedWeeklyUsedPercent = current.UsedPercent;
 
         if (!settings.NotifyOnUsageLimitReached || !becameFullyAvailable || alreadyNotifiedForWindow)
