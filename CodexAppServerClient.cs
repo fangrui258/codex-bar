@@ -12,7 +12,6 @@ internal sealed class CodexAppServerClient : IDisposable
     private Process? process;
     private StreamWriter? input;
     private StreamReader? output;
-    private Task? stderrPump;
     private long nextRequestId;
     private bool disposed;
 
@@ -87,7 +86,7 @@ internal sealed class CodexAppServerClient : IDisposable
         input = process.StandardInput;
         input.AutoFlush = true;
         output = process.StandardOutput;
-        stderrPump = DrainErrorsAsync(process.StandardError);
+        _ = DrainErrorsAsync(process.StandardError);
 
         var initializeId = Interlocked.Increment(ref nextRequestId);
         var initialize = JsonSerializer.Serialize(new
@@ -222,7 +221,6 @@ internal sealed class CodexAppServerClient : IDisposable
             process.Dispose();
             process = null;
         }
-        stderrPump = null;
     }
 
     public void Dispose()
