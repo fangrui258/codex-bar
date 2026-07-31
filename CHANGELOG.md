@@ -1,0 +1,29 @@
+# Changelog
+
+All notable changes to CodexBar are documented here.
+
+## [1.1.0] - 2026-07-31
+
+### Added
+
+- Exact local expiration dates and times for every available banked rate-limit reset, ordered nearest first.
+- Explicit `Always on top — On/Off` status in the tray menu.
+- Optional weekly-capacity reset notifications through SMTP or a prefilled draft in the default mail app.
+- A test-alert command and a live/offline connection indicator.
+
+### Improved
+
+- Reuses the supported Codex app-server response for reset-credit details without reading authentication files or requiring a separate login.
+- Protects stored SMTP passwords with Windows Data Protection API.
+- Validates notification settings, bounds delivery time, and writes settings atomically.
+- Falls back across installed Codex executables and distinguishes retryable transport failures from semantic errors.
+- Reduces unnecessary settings writes and widget repaints.
+
+## [1.0.0] - 2026-07-22
+
+- Initial public release of the lightweight Windows widget.
+- Live weekly Codex capacity and reset-time display.
+- Configurable refresh interval, transparency, always-on-top mode, Windows startup, and notification-area support.
+
+[1.1.0]: https://github.com/jspann21/codex-bar/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/jspann21/codex-bar/releases/tag/v1.0.0

@@ -13,5 +13,7 @@ dotnet publish (Join-Path $projectRoot 'CodexBar.csproj') -c Release -r $Runtime
 
 New-Item -ItemType Directory -Force -Path $distDir | Out-Null
 Copy-Item -LiteralPath (Join-Path $publishDir 'CodexBar.exe') -Destination (Join-Path $distDir 'CodexBar.exe') -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'CHANGELOG.md') -Destination (Join-Path $distDir 'CHANGELOG.md') -Force
 Write-Host "Built $distDir\CodexBar.exe"
+Write-Host "Included $distDir\CHANGELOG.md"
 if (-not $Portable) { Write-Host 'Requires the .NET 10 Desktop Runtime. Use -Portable to bundle it.' }

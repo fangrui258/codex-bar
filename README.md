@@ -136,6 +136,7 @@ WidgetForm.cs      Widget UI, tray menu, rendering, and refresh behavior
 CodexAppServerClient.cs  Live authenticated Codex rate-limit client
 AppSettings.cs     Persistent preferences and Windows startup setting
 build.ps1          Lightweight and portable publishing script
+CHANGELOG.md        Version history and release notes
 assets/            Product screenshots
                     Multi-resolution Windows application icon
 ```
