@@ -16,6 +16,7 @@ CodexBar shows the percentage of your weekly Codex capacity that remains and the
 - Shows a taskbar button while the widget is visible and removes it when minimized to the tray
 - Supports adjustable transparency and always-on-top mode
 - Can launch automatically when Windows starts
+- Can notify you by email when weekly capacity resets to fully available
 - Reuses your existing Codex authentication—no separate login or API key
 - Actively fetches current limits through Codex's supported local app-server interface
 - Roughly 180 KB as a framework-dependent Windows executable
@@ -71,7 +72,7 @@ The percentage is the capacity still available. For example, if Codex reports 10
 
 ## Settings
 
-All display preferences persist between launches.
+Preferences persist between launches.
 
 | Setting | Options | Default | What it does |
 |---|---|---:|---|
@@ -79,6 +80,8 @@ All display preferences persist between launches.
 | Transparency | 100%, 90%, 80%, 70%, 60%, 50% opaque | 90% | Adjusts the entire widget's opacity. |
 | Always on top | On / Off | On | Keeps the widget above ordinary windows. |
 | Start with Windows | On / Off | Off | Adds or removes CodexBar from the current user's startup applications. |
+| Usage notifications | Email draft or SMTP | On, unconfigured | Sends one alert when observed weekly usage returns to zero. Without an SMTP host, CodexBar opens a prefilled draft in the default mail app. |
+| Send test alert | — | — | Exercises the configured notification delivery without changing reset tracking. |
 | Refresh now | — | — | Requests the current live account limit immediately. |
 
 Preferences are stored at:
@@ -101,9 +104,10 @@ This means CodexBar does not scrape the UI, automate a browser, read authenticat
 
 ## Privacy and security
 
-- No credentials, access tokens, or API keys are requested or stored.
+- No Codex credentials, access tokens, or API keys are requested or stored.
 - Authenticated requests are delegated to the official local Codex app-server; CodexBar never handles the underlying token.
 - Only account-wide weekly limit fields are used; conversation content and local session files are never read.
+- If SMTP delivery is configured, its address, host, port, and user are stored in the local settings JSON. The SMTP password is protected with Windows Data Protection API for the current Windows user and is never written there as plaintext.
 
 ## Troubleshooting
 
