@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json;
 
@@ -43,9 +44,30 @@ internal sealed class CodexAppServerClient : IDisposable
         if (process is { HasExited: false } && input is not null && output is not null) return;
 
         StopProcess();
-        var executable = FindCodexExecutable() ??
+        var executables = FindCodexExecutables();
+        if (executables.Count == 0)
             throw new InvalidOperationException("A Codex installation with app-server support was not found.");
 
+        Exception? firstFailure = null;
+        foreach (var executable in executables)
+        {
+            try
+            {
+                await StartAsync(executable);
+                return;
+            }
+            catch (Exception ex) when (ex is Win32Exception or IOException or JsonException or InvalidOperationException or TimeoutException)
+            {
+                firstFailure ??= ex;
+                StopProcess();
+            }
+        }
+
+        throw new InvalidOperationException("No installed Codex executable could start app-server.", firstFailure);
+    }
+
+    private async Task StartAsync(string executable)
+    {
         var startInfo = new ProcessStartInfo
         {
             FileName = executable,
@@ -140,7 +162,7 @@ internal sealed class CodexAppServerClient : IDisposable
         throw new InvalidOperationException("Codex returned no weekly rate-limit window.");
     }
 
-    private static string? FindCodexExecutable()
+    private static List<string> FindCodexExecutables()
     {
         var candidates = new List<string>();
         AddExecutablesBelow(candidates, Path.Combine(
@@ -164,7 +186,7 @@ internal sealed class CodexAppServerClient : IDisposable
 
         return candidates.Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderByDescending(path => File.GetLastWriteTimeUtc(path))
-            .FirstOrDefault();
+            .ToList();
     }
 
     private static void AddExecutablesBelow(List<string> candidates, string root)
