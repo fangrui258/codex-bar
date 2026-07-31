@@ -19,7 +19,7 @@ CodexBar shows the percentage of your weekly Codex capacity that remains and the
 - Can notify you by email when weekly capacity resets to fully available
 - Reuses your existing Codex authentication—no separate login or API key
 - Actively fetches current limits through Codex's supported local app-server interface
-- Roughly 180 KB as a framework-dependent Windows executable
+- Roughly 250 KB as a framework-dependent Windows executable
 
 ## Installation
 
