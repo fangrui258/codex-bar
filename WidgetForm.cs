@@ -242,7 +242,7 @@ internal sealed class WidgetForm : Form
         menu.Items.Add(topmost);
 
         var startup = new ToolStripMenuItem("Start with Windows") { CheckOnClick = true, Checked = AppSettings.StartsWithWindows };
-        startup.CheckedChanged += (_, _) =>
+        startup.Click += (_, _) =>
         {
             try { AppSettings.StartsWithWindows = startup.Checked; }
             catch { startup.Checked = !startup.Checked; }
