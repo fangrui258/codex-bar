@@ -2,15 +2,16 @@
 
 **A tiny Windows desktop widget for keeping an eye on your weekly Codex limit.**
 
-CodexBar shows the percentage of your weekly Codex capacity that remains and the exact date and time of the next reset. It stays out of the way as a compact, draggable widget and continues updating from the Windows notification area.
+CodexBar itself requires no login, API key, or account setup—it automatically reuses your existing signed-in Codex session. It shows the percentage of your weekly Codex capacity that remains, the exact date and time of the next reset, and the expiration dates and times of every available banked reset. It stays out of the way as a compact, draggable widget and continues updating from the Windows notification area.
 
 ![CodexBar showing weekly capacity remaining](assets/codexbar.png)
 
 ## Highlights
 
+- Requires no separate login or API key—automatically reuses your existing Codex authentication
 - Shows **weekly capacity remaining**, not usage consumed
 - Displays the next reset in your local date and time
-- Lists the exact expiration time of each available banked rate-limit reset
+- Lists the exact expiration date and time of every available banked rate-limit reset
 - Changes from green to amber to red as capacity runs low
 - Refreshes automatically at a configurable interval
 - Minimizes to the Windows notification area
@@ -18,7 +19,6 @@ CodexBar shows the percentage of your weekly Codex capacity that remains and the
 - Supports adjustable transparency and always-on-top mode
 - Can launch automatically when Windows starts
 - Can notify you by email when weekly capacity resets to fully available
-- Reuses your existing Codex authentication—no separate login or API key
 - Actively fetches current limits through Codex's supported local app-server interface
 - Roughly 250 KB as a framework-dependent Windows executable
 
