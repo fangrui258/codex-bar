@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.Mail;
+using System.Text;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 
@@ -10,12 +13,15 @@ internal sealed class WidgetForm : Form
     private const int HtCaption = 2;
     private const int WidgetWidth = 286;
     private const int WidgetHeight = 100;
+    private const double FullAvailabilityUsedPercent = 0.001;
+    private static readonly TimeSpan ResetTimeMatchTolerance = TimeSpan.FromHours(1);
     private readonly AppSettings settings = AppSettings.Load();
     private readonly CodexAppServerClient liveClient = new();
     private readonly Icon appIcon;
     private readonly NotifyIcon trayIcon;
     private readonly System.Windows.Forms.Timer refreshTimer;
     private readonly System.Windows.Forms.Timer positionSaveTimer;
+    private readonly System.Windows.Forms.Timer freshnessTimer;
     private readonly SemaphoreSlim refreshGate = new(1, 1);
     private readonly Pen borderPen = new(Color.FromArgb(42, 58, 49));
     private readonly Pen controlPen = new(Color.FromArgb(130, 150, 138), 1.2f);
@@ -23,6 +29,8 @@ internal sealed class WidgetForm : Form
     private readonly Font percentFont = new("Segoe UI Semibold", 25f);
     private readonly Font resetFont = new("Segoe UI", 9f);
     private readonly SolidBrush dimBrush = new(Color.FromArgb(143, 160, 150));
+    private readonly SolidBrush statusOkBrush = new(Color.FromArgb(84, 235, 120));
+    private readonly SolidBrush statusOfflineBrush = new(Color.FromArgb(239, 128, 128));
     private readonly SolidBrush textBrush = new(Color.FromArgb(225, 235, 229));
     private readonly SolidBrush trackBrush = new(Color.FromArgb(31, 39, 34));
     private readonly SolidBrush usageBrush = new(Color.FromArgb(46, 220, 112));
@@ -78,6 +86,9 @@ internal sealed class WidgetForm : Form
             positionSaveTimer.Stop();
             SavePositionNow();
         };
+        freshnessTimer = new System.Windows.Forms.Timer { Interval = 5_000 };
+        freshnessTimer.Tick += (_, _) => Invalidate();
+        freshnessTimer.Start();
 
         Shown += async (_, _) => await RefreshUsageAsync();
         LocationChanged += (_, _) => QueuePositionSave();
@@ -91,9 +102,14 @@ internal sealed class WidgetForm : Form
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
+        var titleY = 14f;
+        var codexHeight = g.MeasureString("CODEX", titleFont).Height;
+        var dotY = titleY + (codexHeight - 6f) / 2f;
+        var statusBrush = liveConnected ? statusOkBrush : statusOfflineBrush;
+        g.FillEllipse(statusBrush, 10, dotY, 6, 6);
         g.DrawRectangle(borderPen, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
 
-        g.DrawString("CODEX  ·  WEEKLY LEFT", titleFont, dimBrush, 16, 14);
+        g.DrawString("CODEX  ·  WEEKLY LEFT", titleFont, dimBrush, 20, titleY);
         DrawWindowControls(g);
 
         if (snapshot is null)
@@ -115,10 +131,6 @@ internal sealed class WidgetForm : Form
             ? $"Resets today · {localReset:h:mm tt}"
             : $"Resets {localReset:ddd, MMM d} · {localReset:h:mm tt}";
         g.DrawString(resetText, resetFont, textBrush, 104, 41);
-        var freshness = liveConnected
-            ? $"Live · checked {RelativeTime(snapshot.CapturedAt)}"
-            : $"Offline · data {RelativeTime(snapshot.CapturedAt)}";
-        g.DrawString(freshness, titleFont, dimBrush, 104, 61);
         DrawProgress(g, remainingPercent, color);
     }
 
@@ -161,13 +173,14 @@ internal sealed class WidgetForm : Form
                 trayIcon.Text = ($"Codex weekly left: {remainingPercent:0}% · reset " +
                     snapshot.ResetsAt.ToLocalTime().ToString("ddd h:mm tt"))[..Math.Min(63,
                     $"Codex weekly left: {remainingPercent:0}% · reset {snapshot.ResetsAt.ToLocalTime():ddd h:mm tt}".Length)];
+                await NotifyIfUsageLimitReachedAsync(snapshot);
             }
             Invalidate();
         }
         catch (Exception ex)
         {
             liveConnected = false;
-            readError = snapshot is null ? "Live usage unavailable" : null;
+            readError = snapshot is null ? "Usage unavailable" : null;
             Debug.WriteLine(ex);
             Invalidate();
         }
@@ -235,9 +248,170 @@ internal sealed class WidgetForm : Form
             catch { startup.Checked = !startup.Checked; }
         };
         menu.Items.Add(startup);
+        menu.Items.Add("Usage notifications…", null, (_, _) => ShowNotificationSettings());
+        menu.Items.Add("Send test alert", null, async (_, _) =>
+        {
+            var sent = await SendTestUsageAlertAsync();
+            trayIcon.ShowBalloonTip(
+                sent ? 2500 : 4500,
+                "CodexBar",
+                sent ? "Test usage alert triggered." : "Could not trigger test usage alert.",
+                sent ? ToolTipIcon.Info : ToolTipIcon.Warning);
+        });
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, (_, _) => { exiting = true; Close(); });
         return menu;
+    }
+
+    private void ShowNotificationSettings()
+    {
+        using var dialog = new Form
+        {
+            Text = "Usage notification settings",
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            StartPosition = FormStartPosition.CenterParent,
+            ClientSize = new Size(540, 360),
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false
+        };
+
+        var header = new Label
+        {
+            Location = new Point(12, 12),
+            AutoSize = false,
+            Size = new Size(510, 50),
+            Text = "When weekly capacity resets to 100% available, CodexBar can send one notification email to your configured address.\n" +
+                   "If SMTP fields are blank, CodexBar opens your default mail app with a prefilled draft instead.",
+            TextAlign = ContentAlignment.TopLeft
+        };
+        header.MaximumSize = new Size(510, 0);
+
+        var enabled = new CheckBox
+        {
+            Text = "Notify when weekly capacity resets to 100% available",
+            Location = new Point(12, 50),
+            AutoSize = true,
+            Checked = settings.NotifyOnUsageLimitReached
+        };
+
+        var toLabel = new Label { Location = new Point(12, 84), AutoSize = true, Text = "Notification address:" };
+        var toInput = new TextBox { Location = new Point(190, 82), Width = 334, Text = settings.UsageLimitNotificationEmail ?? string.Empty };
+
+        var hostLabel = new Label { Location = new Point(12, 118), AutoSize = true, Text = "SMTP host:" };
+        var hostInput = new TextBox { Location = new Point(190, 116), Width = 220, Text = settings.SmtpHost ?? string.Empty };
+
+        var portLabel = new Label { Location = new Point(12, 152), AutoSize = true, Text = "SMTP port:" };
+        var portInput = new TextBox { Location = new Point(190, 150), Width = 90, Text = settings.SmtpPort.ToString(System.Globalization.CultureInfo.InvariantCulture) };
+
+        var ssl = new CheckBox
+        {
+            Text = "Use SSL/TLS",
+            Location = new Point(290, 150),
+            AutoSize = true,
+            Checked = settings.SmtpUseSsl
+        };
+
+        var userLabel = new Label { Location = new Point(12, 186), AutoSize = true, Text = "SMTP user:" };
+        var userInput = new TextBox { Location = new Point(190, 184), Width = 334, Text = settings.SmtpUser ?? string.Empty };
+
+        var passwordLabel = new Label { Location = new Point(12, 220), AutoSize = true, Text = "SMTP password:" };
+        var passwordInput = new TextBox
+        {
+            Location = new Point(190, 218),
+            Width = 334,
+            Text = settings.SmtpPassword ?? string.Empty,
+            UseSystemPasswordChar = true
+        };
+
+        var fromLabel = new Label { Location = new Point(12, 254), AutoSize = true, Text = "From address (optional):" };
+        var fromInput = new TextBox { Location = new Point(190, 252), Width = 334, Text = settings.SmtpFromAddress ?? string.Empty };
+
+        var save = new Button
+        {
+            Text = "Save",
+            DialogResult = DialogResult.OK,
+            Location = new Point(445, 298),
+            Width = 75,
+            Height = 28
+        };
+        var cancel = new Button
+        {
+            Text = "Cancel",
+            DialogResult = DialogResult.Cancel,
+            Location = new Point(362, 298),
+            Width = 75,
+            Height = 28
+        };
+        var instructions = new Label
+        {
+            Location = new Point(12, 298),
+            AutoSize = false,
+            Width = 340,
+            Text = "Tip: Gmail requires an app password (not your login password)."
+        };
+
+        if (settings.NotifyOnUsageLimitReached)
+            instructions.Text += " Tip 2: Leave SMTP host blank to use mail draft fallback.";
+        dialog.Controls.AddRange(new Control[]
+        {
+            header, enabled, toLabel, toInput, hostLabel, hostInput, portLabel, portInput, ssl,
+            userLabel, userInput, passwordLabel, passwordInput, fromLabel, fromInput,
+            save, cancel, instructions
+        });
+
+        dialog.AcceptButton = save;
+        dialog.CancelButton = cancel;
+
+        if (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            if (enabled.Checked && string.IsNullOrWhiteSpace(toInput.Text))
+            {
+                MessageBox.Show(this, "Notification email is required when notifications are enabled.", "Validation", MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(hostInput.Text))
+            {
+                if (!int.TryParse(portInput.Text, out var parsedPort) || parsedPort is < 1 or > 65535)
+                {
+                    MessageBox.Show(this, "SMTP port must be a number between 1 and 65535.", "Validation", MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    return;
+                }
+
+                settings.SmtpPort = parsedPort;
+            }
+
+            settings.NotifyOnUsageLimitReached = enabled.Checked;
+            settings.UsageLimitNotificationEmail = NormalizeOrNull(toInput.Text);
+            settings.SmtpHost = NormalizeOrNull(hostInput.Text);
+            settings.SmtpUseSsl = ssl.Checked;
+            settings.SmtpUser = NormalizeOrNull(userInput.Text);
+            settings.SmtpPassword = NormalizeOrNull(passwordInput.Text);
+            settings.SmtpFromAddress = NormalizeOrNull(fromInput.Text);
+            settings.Save();
+        }
+    }
+
+    private static string? NormalizeOrNull(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        return value.Trim();
+    }
+
+    private static string BuildNotificationBody(UsageSnapshot snapshot, bool isTest = false)
+    {
+        var resetText = snapshot.ResetsAt.ToLocalTime().ToString("ddd, MMM d h:mm tt");
+        return new StringBuilder()
+            .Append(isTest ? "TEST: " : string.Empty)
+            .Append("Codex has reached 0% usage (100% available) at ")
+            .Append(DateTimeOffset.Now.ToString("ddd, MMM d h:mm tt"))
+            .Append(". Current window resets at ")
+            .Append(resetText)
+            .Append('.')
+            .ToString();
     }
 
     private void DrawWindowControls(Graphics g)
@@ -267,13 +441,129 @@ internal sealed class WidgetForm : Form
     private static Color Lerp(Color a, Color b, double t) => Color.FromArgb(
         (int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
 
-    private static string RelativeTime(DateTimeOffset time)
+    private async Task NotifyIfUsageLimitReachedAsync(UsageSnapshot current)
     {
-        var age = DateTimeOffset.UtcNow - time.ToUniversalTime();
-        if (age.TotalMinutes < 1) return "just now";
-        if (age.TotalHours < 1) return $"{(int)age.TotalMinutes}m ago";
-        if (age.TotalDays < 1) return $"{(int)age.TotalHours}h ago";
-        return time.ToLocalTime().ToString("MMM d");
+        var previousUsedPercent = settings.LastObservedWeeklyUsedPercent;
+        var lastNotificationReset = settings.LastUsageLimitNotificationResetAt;
+        var alreadyNotifiedForWindow = lastNotificationReset.HasValue &&
+            (current.ResetsAt - lastNotificationReset.Value).Duration() <= ResetTimeMatchTolerance;
+        var becameFullyAvailable = previousUsedPercent.HasValue &&
+            previousUsedPercent.Value > FullAvailabilityUsedPercent &&
+            current.UsedPercent <= FullAvailabilityUsedPercent;
+
+        // Persist every observation first. If the app restarts, or notification
+        // delivery fails, this transition cannot be handled a second time.
+        settings.LastObservedWeeklyResetAt = current.ResetsAt;
+        settings.LastObservedWeeklyUsedPercent = current.UsedPercent;
+
+        if (!settings.NotifyOnUsageLimitReached || !becameFullyAvailable || alreadyNotifiedForWindow)
+        {
+            settings.Save();
+            return;
+        }
+
+        // The reset can happen at any time, so do not infer it from the expected
+        // weekly schedule. The usage transition above is the event; the reset time
+        // is retained only as a narrow guard against duplicate readings.
+        settings.LastUsageLimitNotificationResetAt = current.ResetsAt;
+        settings.Save();
+
+        var sent = await TrySendUsageLimitEmailAsync(current);
+        trayIcon.ShowBalloonTip(
+            sent ? 2500 : 4500,
+            "CodexBar",
+            sent
+                ? "Weekly capacity reset to 100% available. The email notification was triggered."
+                : "Weekly capacity reset to 100% available, but the email notification could not be sent.",
+            sent ? ToolTipIcon.Info : ToolTipIcon.Warning);
+    }
+
+    private async Task<bool> SendTestUsageAlertAsync()
+    {
+        var test = new UsageSnapshot(
+            0,
+            DateTimeOffset.UtcNow.AddHours(24),
+            DateTimeOffset.UtcNow);
+        return await SendUsageLimitEmailAsync(test, isTest: true, forceSend: true);
+    }
+
+    private async Task<bool> TrySendUsageLimitEmailAsync(UsageSnapshot current)
+    {
+        return await SendUsageLimitEmailAsync(current);
+    }
+
+    private async Task<bool> SendUsageLimitEmailAsync(UsageSnapshot current, bool isTest = false, bool forceSend = false)
+    {
+        var toAddress = settings.UsageLimitNotificationEmail;
+        var smtpHost = settings.SmtpHost;
+
+        if (!forceSend && !settings.NotifyOnUsageLimitReached)
+            return false;
+        if (string.IsNullOrWhiteSpace(toAddress))
+            return false;
+
+        if (string.IsNullOrWhiteSpace(smtpHost))
+            return TryLaunchMailClient(current, toAddress!, isTest);
+
+        return await SendViaSmtpAsync(current, toAddress!, smtpHost, isTest);
+    }
+
+    private static bool TryLaunchMailClient(UsageSnapshot current, string toAddress, bool isTest)
+    {
+        try
+        {
+            var subject = Uri.EscapeDataString(isTest
+                ? "TEST: Codex weekly capacity reset alert"
+                : "Codex weekly capacity is 100% available");
+            var body = Uri.EscapeDataString(BuildNotificationBody(current, isTest));
+            var uri = $"mailto:{toAddress}?subject={subject}&body={body}";
+
+            Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine(ex);
+            return false;
+        }
+    }
+
+    private async Task<bool> SendViaSmtpAsync(UsageSnapshot current, string toAddress, string smtpHost, bool isTest)
+    {
+        try
+        {
+            var fromAddress = string.IsNullOrWhiteSpace(settings.SmtpFromAddress) ? toAddress : settings.SmtpFromAddress!;
+            var subject = isTest
+                ? "TEST: Codex weekly capacity reset alert"
+                : "Codex weekly capacity is 100% available";
+            var body = BuildNotificationBody(current, isTest);
+
+            using var message = new MailMessage(fromAddress, toAddress)
+            {
+                Subject = subject,
+                Body = body
+            };
+
+            var credentialsProvided = !string.IsNullOrWhiteSpace(settings.SmtpUser) &&
+                !string.IsNullOrWhiteSpace(settings.SmtpPassword);
+            using var client = new SmtpClient(smtpHost, Math.Clamp(settings.SmtpPort, 1, 65535))
+            {
+                EnableSsl = settings.SmtpUseSsl,
+                DeliveryMethod = SmtpDeliveryMethod.Network,
+                UseDefaultCredentials = !credentialsProvided
+            };
+
+            if (credentialsProvided)
+                client.Credentials = new NetworkCredential(settings.SmtpUser, settings.SmtpPassword);
+
+            await client.SendMailAsync(message);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine(ex);
+            return false;
+        }
     }
 
     private void ShowWidget()
@@ -301,6 +591,7 @@ internal sealed class WidgetForm : Form
             return;
         }
         refreshTimer.Stop();
+        freshnessTimer.Stop();
         FlushPositionSave();
         trayIcon.Visible = false;
     }
@@ -341,6 +632,7 @@ internal sealed class WidgetForm : Form
             liveClient.Dispose();
             refreshTimer.Dispose();
             positionSaveTimer.Dispose();
+            freshnessTimer.Dispose();
             trayIcon.Dispose();
             appIcon.Dispose();
             borderPen.Dispose();
@@ -349,6 +641,8 @@ internal sealed class WidgetForm : Form
             percentFont.Dispose();
             resetFont.Dispose();
             dimBrush.Dispose();
+            statusOkBrush.Dispose();
+            statusOfflineBrush.Dispose();
             textBrush.Dispose();
             trackBrush.Dispose();
             usageBrush.Dispose();
