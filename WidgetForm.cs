@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Mail;
-using System.Text;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 
@@ -162,17 +161,14 @@ internal sealed class WidgetForm : Form
         refreshTimer.Stop();
         try
         {
-            snapshot = await liveClient.ReadWeeklyAsync();
+            var current = await liveClient.ReadWeeklyAsync();
+            snapshot = current;
             liveConnected = true;
             readError = null;
-            if (snapshot is not null)
-            {
-                var remainingPercent = 100 - snapshot.UsedPercent;
-                trayIcon.Text = ($"Codex weekly left: {remainingPercent:0}% · reset " +
-                    snapshot.ResetsAt.ToLocalTime().ToString("ddd h:mm tt"))[..Math.Min(63,
-                    $"Codex weekly left: {remainingPercent:0}% · reset {snapshot.ResetsAt.ToLocalTime():ddd h:mm tt}".Length)];
-                await NotifyIfUsageLimitReachedAsync(snapshot);
-            }
+            var remainingPercent = 100 - current.UsedPercent;
+            var tooltip = $"Codex weekly left: {remainingPercent:0}% · reset {current.ResetsAt.ToLocalTime():ddd h:mm tt}";
+            trayIcon.Text = tooltip[..Math.Min(63, tooltip.Length)];
+            await NotifyIfUsageLimitReachedAsync(current);
             Invalidate();
         }
         catch (Exception ex)
@@ -439,14 +435,9 @@ internal sealed class WidgetForm : Form
     private static string BuildNotificationBody(UsageSnapshot snapshot, bool isTest = false)
     {
         var resetText = snapshot.ResetsAt.ToLocalTime().ToString("ddd, MMM d h:mm tt");
-        return new StringBuilder()
-            .Append(isTest ? "TEST: " : string.Empty)
-            .Append("Codex has reached 0% usage (100% available) at ")
-            .Append(DateTimeOffset.Now.ToString("ddd, MMM d h:mm tt"))
-            .Append(". Current window resets at ")
-            .Append(resetText)
-            .Append('.')
-            .ToString();
+        var prefix = isTest ? "TEST: " : string.Empty;
+        return $"{prefix}Codex has reached 0% usage (100% available) at {DateTimeOffset.Now:ddd, MMM d h:mm tt}. " +
+            $"Current window resets at {resetText}.";
     }
 
     private void DrawWindowControls(Graphics g)
@@ -507,7 +498,7 @@ internal sealed class WidgetForm : Form
         settings.LastUsageLimitNotificationResetAt = current.ResetsAt;
         settings.Save();
 
-        var sent = await TrySendUsageLimitEmailAsync(current);
+        var sent = await SendUsageLimitEmailAsync(current);
         trayIcon.ShowBalloonTip(
             sent ? 2500 : 4500,
             "CodexBar",
@@ -517,18 +508,13 @@ internal sealed class WidgetForm : Form
             sent ? ToolTipIcon.Info : ToolTipIcon.Warning);
     }
 
-    private async Task<bool> SendTestUsageAlertAsync()
+    private Task<bool> SendTestUsageAlertAsync()
     {
         var test = new UsageSnapshot(
             0,
             DateTimeOffset.UtcNow.AddHours(24),
             DateTimeOffset.UtcNow);
-        return await SendUsageLimitEmailAsync(test, isTest: true, forceSend: true);
-    }
-
-    private async Task<bool> TrySendUsageLimitEmailAsync(UsageSnapshot current)
-    {
-        return await SendUsageLimitEmailAsync(current);
+        return SendUsageLimitEmailAsync(test, isTest: true, forceSend: true);
     }
 
     private async Task<bool> SendUsageLimitEmailAsync(UsageSnapshot current, bool isTest = false, bool forceSend = false)
