@@ -14,6 +14,7 @@ internal sealed class WidgetForm : Form
     private const int WidgetWidth = 286;
     private const int WidgetHeight = 100;
     private const double FullAvailabilityUsedPercent = 0.001;
+    private static readonly TimeSpan NotificationDeliveryTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ResetTimeMatchTolerance = TimeSpan.FromHours(1);
     private readonly AppSettings settings = AppSettings.Load();
     private readonly CodexAppServerClient liveClient = new();
@@ -601,7 +602,8 @@ internal sealed class WidgetForm : Form
             if (credentialsProvided)
                 client.Credentials = new NetworkCredential(settings.SmtpUser, settings.SmtpPassword);
 
-            await client.SendMailAsync(message);
+            using var timeout = new CancellationTokenSource(NotificationDeliveryTimeout);
+            await client.SendMailAsync(message, timeout.Token);
             return true;
         }
         catch (Exception ex)
