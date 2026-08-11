@@ -12,6 +12,11 @@ internal sealed class WidgetForm : Form
     private const int HtCaption = 2;
     private const int WidgetWidth = 286;
     private const int WidgetHeight = 100;
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoActivate = 0x0010;
+    private static readonly IntPtr HwndTopMost = new(-1);
+    private static readonly IntPtr HwndNoTopMost = new(-2);
     private const double FullAvailabilityUsedPercent = 0.001;
     private static readonly TimeSpan NotificationDeliveryTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ResetTimeMatchTolerance = TimeSpan.FromHours(1);
@@ -43,6 +48,17 @@ internal sealed class WidgetForm : Form
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("user32.dll")]
     private static extern bool DestroyIcon(IntPtr handle);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(
+        IntPtr windowHandle,
+        IntPtr insertAfter,
+        int x,
+        int y,
+        int width,
+        int height,
+        uint flags);
 
     public WidgetForm()
     {
@@ -93,6 +109,18 @@ internal sealed class WidgetForm : Form
         LocationChanged += (_, _) => QueuePositionSave();
         FormClosing += OnFormClosing;
         MouseDoubleClick += (_, _) => HideToTray();
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        ApplyAlwaysOnTopState();
+    }
+
+    protected override void OnVisibleChanged(EventArgs e)
+    {
+        base.OnVisibleChanged(e);
+        if (Visible) ApplyAlwaysOnTopState();
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -236,7 +264,8 @@ internal sealed class WidgetForm : Form
         };
         topmost.CheckedChanged += (_, _) =>
         {
-            settings.AlwaysOnTop = TopMost = topmost.Checked;
+            settings.AlwaysOnTop = topmost.Checked;
+            ApplyAlwaysOnTopState();
             topmost.Text = $"Always on top — {(topmost.Checked ? "On" : "Off")}";
             settings.Save();
         };
@@ -647,7 +676,23 @@ internal sealed class WidgetForm : Form
         ShowInTaskbar = true;
         Show();
         WindowState = FormWindowState.Normal;
+        ApplyAlwaysOnTopState();
         Activate();
+    }
+
+    private void ApplyAlwaysOnTopState()
+    {
+        TopMost = settings.AlwaysOnTop;
+        if (!IsHandleCreated) return;
+
+        _ = SetWindowPos(
+            Handle,
+            settings.AlwaysOnTop ? HwndTopMost : HwndNoTopMost,
+            0,
+            0,
+            0,
+            0,
+            SwpNoMove | SwpNoSize | SwpNoActivate);
     }
 
     private void HideToTray()
