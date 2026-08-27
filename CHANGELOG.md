@@ -4,6 +4,8 @@ All notable changes to CodexBar are documented here.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-27
+
 ### Added
 
 - Displays the account-wide 5-hour Codex capacity and reset time alongside the existing weekly limit.
@@ -43,7 +45,8 @@ All notable changes to CodexBar are documented here.
 - Live weekly Codex capacity and reset-time display.
 - Configurable refresh interval, transparency, always-on-top mode, Windows startup, and notification-area support.
 
-[Unreleased]: https://github.com/jspann21/codex-bar/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/fangrui258/codex-bar/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/fangrui258/codex-bar/releases/tag/v1.2.0
 [1.1.1]: https://github.com/jspann21/codex-bar/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/jspann21/codex-bar/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/jspann21/codex-bar/releases/tag/v1.0.0
