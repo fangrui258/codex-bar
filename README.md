@@ -40,13 +40,13 @@ Preferences persist between launches.
 
 | Setting | Options | Default | What it does |
 |---|---|---:|---|
-| Refresh interval | 5 sec, 15 sec, 30 sec, 1 min, 5 min | 15 sec | Controls how often CodexBar requests the current live account limit. |
+| Refresh interval | 5 sec, 15 sec, 30 sec, 1 min, 5 min | 15 sec | Controls how often CodexBar requests the current live account limits. |
 | Transparency | 100%, 90%, 80%, 70%, 60%, 50% opaque | 90% | Adjusts the entire widget's opacity. |
 | Always on top | On / Off | On | Keeps the widget above ordinary windows. |
 | Start with Windows | On / Off | Off | Adds or removes CodexBar from the current user's startup applications. |
 | Usage notifications | SMTP | On, unconfigured | Sends one alert when observed weekly usage returns to zero and SMTP is configured. |
 | Send test alert | — | — | Exercises the configured notification delivery without changing reset tracking. |
-| Refresh now | — | — | Requests the current live account limit immediately. |
+| Refresh now | — | — | Requests the current live account limits immediately. |
 
 Preferences are stored at:
 
@@ -78,14 +78,19 @@ This means CodexBar does not scrape the UI, automate a browser, read authenticat
 
 - No Codex credentials, access tokens, or API keys are requested or stored.
 - Authenticated requests are delegated to the official local Codex app-server; CodexBar never handles the underlying token.
-- Only account-wide 5-hour and weekly limit fields are used; conversation content and local session files are never read.
+- Only account-wide rate-limit windows and reset-credit expiration metadata are used; conversation content and local session files are never read.
 - If SMTP delivery is configured, its address, host, port, and user are stored in the local settings JSON. The SMTP password is protected with Windows Data Protection API for the current Windows user and is never written there as plaintext.
 
 ## Installation
 
 ### Download a release
 
-Download `CodexBar.exe` from the repository's **Releases** page and run it. The lightweight build requires the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/10.0). A portable release may also be provided for computers without .NET installed.
+Download one of the Windows x64 builds from the latest release:
+
+- [`CodexBar-win-x64.exe`](https://github.com/fangrui258/codex-bar/releases/latest/download/CodexBar-win-x64.exe) — lightweight build; requires the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/10.0).
+- [`CodexBar-win-x64-portable.exe`](https://github.com/fangrui258/codex-bar/releases/latest/download/CodexBar-win-x64-portable.exe) — self-contained portable build; no separate .NET installation is required.
+
+Prebuilt release assets currently target Windows x64. Windows on ARM64 is supported when building from source using the command below.
 
 Windows may show a SmartScreen warning for unsigned community-built executables. Choose **More info → Run anyway** only if you downloaded the file from a release you trust.
 
@@ -93,7 +98,7 @@ Windows may show a SmartScreen warning for unsigned community-built executables.
 
 Requirements:
 
-- Windows 10 or Windows 11, x64 or ARM64
+- Windows 10 or Windows 11, x64 or ARM64 (source builds)
 - .NET 10 SDK or newer
 - Codex app or CLI used at least once
 
