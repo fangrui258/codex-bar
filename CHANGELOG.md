@@ -4,6 +4,16 @@ All notable changes to CodexBar are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Displays the account-wide 5-hour Codex capacity and reset time alongside the existing weekly limit.
+- Covers duration-based window selection, primary/secondary ordering, multi-bucket responses, missing 5-hour windows, and reset-credit parsing with a zero-dependency regression test harness.
+
+### Improved
+
+- Selects the account-wide `codex` bucket from the app-server multi-bucket response when available.
+- Keeps weekly usage available when an account does not report a 5-hour window.
+
 ## [1.1.1] - 2026-07-31
 
 - Makes the Start with Windows status explicit in the tray menu.

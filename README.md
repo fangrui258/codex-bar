@@ -1,16 +1,16 @@
 # CodexBar
 
-**A tiny Windows desktop widget for keeping an eye on your weekly Codex limit.**
+**A tiny Windows desktop widget for keeping an eye on your 5-hour and weekly Codex limits.**
 
-CodexBar itself requires no login, API key, or account setup—it automatically reuses your existing signed-in Codex session. It shows the percentage of your weekly Codex capacity that remains, the exact date and time of the next reset, and the expiration dates and times of every available banked reset. It stays out of the way as a compact, draggable widget and continues updating from the Windows notification area.
+CodexBar itself requires no login, API key, or account setup—it automatically reuses your existing signed-in Codex session. It shows the percentage remaining and next reset for both the 5-hour and weekly Codex windows, plus the expiration dates and times of every available banked reset. It stays out of the way as a compact, draggable widget and continues updating from the Windows notification area.
 
-![CodexBar showing weekly capacity remaining](assets/codexbar.png)
+![CodexBar showing 5-hour and weekly capacity remaining](assets/codexbar.png)
 
 ## Highlights
 
 - Requires no separate login or API key—automatically reuses your existing Codex authentication
-- Shows **weekly capacity remaining**, not usage consumed
-- Displays the next reset in your local date and time
+- Shows **5-hour and weekly capacity remaining**, not usage consumed
+- Displays both next-reset times in your local date and time
 - Lists the exact expiration date and time of every available banked rate-limit reset
 - Changes from green to amber to red as capacity runs low
 - Refreshes automatically at a configurable interval
@@ -32,7 +32,7 @@ CodexBar itself requires no login, API key, or account setup—it automatically 
 - **Close:** clicking `×` minimizes CodexBar to the tray so it can keep updating.
 - **Quit:** choose **Exit** from the tray menu.
 
-The percentage is the capacity still available. For example, if Codex reports 10% used, CodexBar displays **90% left**.
+Each percentage is the capacity still available in that window. For example, if Codex reports 10% used in the 5-hour window, CodexBar displays **90% left** for that window.
 
 ## Settings
 
@@ -69,8 +69,8 @@ CodexBar uses the authenticated Codex installation already on your computer:
 1. Starts Codex's local `app-server` in the background using the installed Codex executable.
 2. Calls the supported `account/rateLimits/read` method at the selected refresh interval. Codex owns authentication, token refresh, and the upstream request.
 3. Selects the account-wide `codex` limit, ignoring separate model-specific pools.
-4. Finds the seven-day window (`10080` minutes), whether Codex reports it as the primary or secondary limit.
-5. Displays `100 − used_percent`, the weekly reset, and any available banked-reset expirations in your local time zone.
+4. Finds the 5-hour (`300` minutes) and seven-day (`10080` minutes) windows by duration, regardless of whether Codex reports either one as the primary or secondary limit.
+5. Displays `100 − used_percent` and the reset time for each window, plus any available banked-reset expirations in your local time zone.
 
 This means CodexBar does not scrape the UI, automate a browser, read authentication tokens directly, or maintain a second login. The default refresh interval is 15 seconds, but you can change it from **Refresh interval** in the tray menu. Each selected interval performs a real authenticated rate-limit read—for example, selecting 5 seconds sends one read every 5 seconds, while selecting 5 minutes sends one every 5 minutes. If a request fails, the widget clearly labels the last successful live value as **Offline** while it retries.
 
@@ -78,7 +78,7 @@ This means CodexBar does not scrape the UI, automate a browser, read authenticat
 
 - No Codex credentials, access tokens, or API keys are requested or stored.
 - Authenticated requests are delegated to the official local Codex app-server; CodexBar never handles the underlying token.
-- Only account-wide weekly limit fields are used; conversation content and local session files are never read.
+- Only account-wide 5-hour and weekly limit fields are used; conversation content and local session files are never read.
 - If SMTP delivery is configured, its address, host, port, and user are stored in the local settings JSON. The SMTP password is protected with Windows Data Protection API for the current Windows user and is never written there as plaintext.
 
 ## Installation
@@ -118,6 +118,14 @@ For Windows on ARM:
 .\build.ps1 -Runtime win-arm64
 ```
 
+### Run regression checks
+
+The parser checks use a zero-dependency console harness, so run the repository test entry point instead of `dotnet test`:
+
+```powershell
+.\test.ps1
+```
+
 ## Troubleshooting
 
 ### “Open Codex and sign in”
@@ -142,8 +150,10 @@ Install the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/en-us/downloa
 CodexBar.csproj    Windows Forms project configuration
 WidgetForm.cs      Widget UI, tray menu, rendering, and refresh behavior
 CodexAppServerClient.cs  Live authenticated Codex rate-limit client
+UsageRateParser.cs       Account-wide 5-hour and weekly window parser
 AppSettings.cs     Persistent preferences and Windows startup setting
 build.ps1          Lightweight and portable publishing script
+test.ps1           Zero-dependency parser regression checks
 CHANGELOG.md        Version history and release notes
 assets/            Product screenshots
                     Multi-resolution Windows application icon
@@ -153,4 +163,5 @@ assets/            Product screenshots
 
 - Windows only.
 - The lightweight build depends on the .NET 10 Desktop Runtime.
-- It reports the account-wide weekly Codex pool, not separate model-specific limits.
+- It reports the account-wide 5-hour and weekly Codex pools, not separate model-specific limits.
+- If Codex does not return a 5-hour window for an account, the widget labels that row as unavailable while continuing to display the weekly window.

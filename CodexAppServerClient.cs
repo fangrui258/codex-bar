@@ -4,9 +4,13 @@ using System.Text.Json;
 
 namespace CodexBar;
 
-internal sealed record UsageSnapshot(
+internal sealed record UsageWindow(
     double UsedPercent,
-    DateTimeOffset ResetsAt,
+    DateTimeOffset ResetsAt);
+
+internal sealed record UsageSnapshot(
+    UsageWindow? FiveHour,
+    UsageWindow Weekly,
     DateTimeOffset CapturedAt,
     IReadOnlyList<DateTimeOffset> ResetExpirations);
 
@@ -19,7 +23,7 @@ internal sealed class CodexAppServerClient : IDisposable
     private long nextRequestId;
     private bool disposed;
 
-    public async Task<UsageSnapshot> ReadWeeklyAsync()
+    public async Task<UsageSnapshot> ReadUsageAsync()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
 
@@ -30,7 +34,7 @@ internal sealed class CodexAppServerClient : IDisposable
             {
                 await EnsureStartedAsync();
                 var response = await SendRequestAsync("account/rateLimits/read");
-                return ParseWeekly(response);
+                return UsageRateParser.Parse(response);
             }
             catch (Exception ex) when (ex is IOException or JsonException or TimeoutException)
             {
@@ -136,63 +140,6 @@ internal sealed class CodexAppServerClient : IDisposable
 
             return root.Clone();
         }
-    }
-
-    private static UsageSnapshot ParseWeekly(JsonElement response)
-    {
-        if (!response.TryGetProperty("result", out var result) ||
-            !result.TryGetProperty("rateLimits", out var limits) ||
-            limits.ValueKind != JsonValueKind.Object)
-            throw new InvalidOperationException("Codex returned no ChatGPT rate limits. Sign in to Codex first.");
-
-        if (limits.TryGetProperty("limitId", out var limitId) &&
-            limitId.ValueKind == JsonValueKind.String &&
-            !string.Equals(limitId.GetString(), "codex", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Codex returned a model-specific pool instead of the account limit.");
-
-        foreach (var name in new[] { "primary", "secondary" })
-        {
-            if (!limits.TryGetProperty(name, out var window) || window.ValueKind != JsonValueKind.Object) continue;
-            if (!window.TryGetProperty("windowDurationMins", out var minutes) ||
-                !minutes.TryGetInt32(out var duration) || duration != 7 * 24 * 60) continue;
-            if (!window.TryGetProperty("usedPercent", out var used) || !used.TryGetDouble(out var percent) ||
-                !window.TryGetProperty("resetsAt", out var reset) || !reset.TryGetInt64(out var unixReset)) continue;
-
-            return new UsageSnapshot(
-                Math.Clamp(percent, 0, 100),
-                DateTimeOffset.FromUnixTimeSeconds(unixReset),
-                DateTimeOffset.UtcNow,
-                ParseResetCreditExpirations(result));
-        }
-
-        throw new InvalidOperationException("Codex returned no weekly rate-limit window.");
-    }
-
-    private static IReadOnlyList<DateTimeOffset> ParseResetCreditExpirations(JsonElement result)
-    {
-        if (!result.TryGetProperty("rateLimitResetCredits", out var summary) ||
-            summary.ValueKind != JsonValueKind.Object ||
-            !summary.TryGetProperty("credits", out var credits) ||
-            credits.ValueKind != JsonValueKind.Array)
-            return Array.Empty<DateTimeOffset>();
-
-        var expirations = new List<DateTimeOffset>();
-        foreach (var credit in credits.EnumerateArray())
-        {
-            if (credit.ValueKind != JsonValueKind.Object ||
-                !credit.TryGetProperty("status", out var status) ||
-                status.ValueKind != JsonValueKind.String ||
-                !string.Equals(status.GetString(), "available", StringComparison.OrdinalIgnoreCase) ||
-                !credit.TryGetProperty("expiresAt", out var expiresAt) ||
-                !expiresAt.TryGetInt64(out var unixExpiration))
-                continue;
-
-            try { expirations.Add(DateTimeOffset.FromUnixTimeSeconds(unixExpiration)); }
-            catch (ArgumentOutOfRangeException) { }
-        }
-
-        expirations.Sort();
-        return expirations;
     }
 
     private static List<string> FindCodexExecutables()
