@@ -11,7 +11,9 @@ internal sealed class WidgetForm : Form
     private const int WmNchittest = 0x0084;
     private const int HtCaption = 2;
     private const int WidgetWidth = 286;
-    private const int WidgetHeight = 100;
+    private const int WidgetHeight = 160;
+    private const int FiveHourProgressY = 78;
+    private const int WeeklyProgressY = WidgetHeight - 17;
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoMove = 0x0002;
     private const uint SwpNoActivate = 0x0010;
@@ -30,7 +32,7 @@ internal sealed class WidgetForm : Form
     private readonly Pen borderPen = new(Color.FromArgb(42, 58, 49));
     private readonly Pen controlPen = new(Color.FromArgb(130, 150, 138), 1.2f);
     private readonly Font titleFont = new("Segoe UI Semibold", 8.5f);
-    private readonly Font percentFont = new("Segoe UI Semibold", 25f);
+    private readonly Font percentFont = new("Segoe UI Semibold", 22f);
     private readonly Font resetFont = new("Segoe UI", 9f);
     private readonly Font compactResetFont = new("Segoe UI", 7.5f);
     private readonly Font denseResetFont = new("Segoe UI", 6.5f);
@@ -84,7 +86,7 @@ internal sealed class WidgetForm : Form
         trayIcon = new NotifyIcon
         {
             Icon = (Icon)appIcon.Clone(),
-            Text = "CodexBar — loading weekly usage",
+            Text = "CodexBar — loading usage limits",
             Visible = true,
             ContextMenuStrip = BuildTrayMenu()
         };
@@ -136,25 +138,45 @@ internal sealed class WidgetForm : Form
         g.FillEllipse(statusBrush, 10, dotY, 6, 6);
         g.DrawRectangle(borderPen, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
 
-        g.DrawString("CODEX  ·  WEEKLY LEFT", titleFont, dimBrush, 20, titleY);
+        g.DrawString("CODEX  ·  LIMITS", titleFont, dimBrush, 20, titleY);
         DrawWindowControls(g);
+        g.DrawString("5-HOUR LEFT", titleFont, dimBrush, 14, 31);
+        g.DrawString("WEEKLY LEFT", titleFont, dimBrush, 14, 88);
+        g.DrawLine(borderPen, 16, 84, Width - 16, 84);
 
         if (snapshot is null)
         {
             var message = readError ?? "Waiting for Codex usage…";
-            g.DrawString("—%", percentFont, textBrush, 14, 33);
-            g.DrawString(message, resetFont, dimBrush, 104, 46);
-            DrawProgress(g, 0, Color.FromArgb(45, 62, 52));
+            g.DrawString("—%", percentFont, textBrush, 14, 43);
+            g.DrawString(message, resetFont, dimBrush, 104, 52);
+            g.DrawString("—%", percentFont, textBrush, 14, 100);
+            DrawProgress(g, 0, Color.FromArgb(45, 62, 52), FiveHourProgressY);
+            DrawProgress(g, 0, Color.FromArgb(45, 62, 52), WeeklyProgressY);
             return;
         }
 
-        var remainingPercent = 100 - snapshot.UsedPercent;
-        var color = RemainingColor(remainingPercent);
-        usageBrush.Color = color;
-        g.DrawString($"{remainingPercent:0}%", percentFont, usageBrush, 14, 33);
+        if (snapshot.FiveHour is { } fiveHour)
+        {
+            var fiveHourRemaining = 100 - fiveHour.UsedPercent;
+            var fiveHourColor = RemainingColor(fiveHourRemaining);
+            usageBrush.Color = fiveHourColor;
+            g.DrawString($"{fiveHourRemaining:0}%", percentFont, usageBrush, 14, 43);
+            DrawResetSchedule(g, fiveHour, Array.Empty<DateTimeOffset>(), 104, 52);
+            DrawProgress(g, fiveHourRemaining, fiveHourColor, FiveHourProgressY);
+        }
+        else
+        {
+            g.DrawString("—%", percentFont, textBrush, 14, 43);
+            g.DrawString("Not reported by Codex", resetFont, dimBrush, 104, 52);
+            DrawProgress(g, 0, Color.FromArgb(45, 62, 52), FiveHourProgressY);
+        }
 
-        DrawResetSchedule(g, snapshot);
-        DrawProgress(g, remainingPercent, color);
+        var weeklyRemaining = 100 - snapshot.Weekly.UsedPercent;
+        var weeklyColor = RemainingColor(weeklyRemaining);
+        usageBrush.Color = weeklyColor;
+        g.DrawString($"{weeklyRemaining:0}%", percentFont, usageBrush, 14, 100);
+        DrawResetSchedule(g, snapshot.Weekly, snapshot.ResetExpirations, 104, 104);
+        DrawProgress(g, weeklyRemaining, weeklyColor, WeeklyProgressY);
     }
 
     protected override void WndProc(ref Message m)
@@ -187,12 +209,15 @@ internal sealed class WidgetForm : Form
         refreshTimer.Stop();
         try
         {
-            var current = await liveClient.ReadWeeklyAsync();
+            var current = await liveClient.ReadUsageAsync();
             snapshot = current;
             liveConnected = true;
             readError = null;
-            var remainingPercent = 100 - current.UsedPercent;
-            var tooltip = $"Codex weekly left: {remainingPercent:0}% · reset {current.ResetsAt.ToLocalTime():ddd h:mm tt}";
+            var weeklyRemaining = 100 - current.Weekly.UsedPercent;
+            var fiveHourText = current.FiveHour is { } fiveHour
+                ? $"5h {100 - fiveHour.UsedPercent:0}%"
+                : "5h unavailable";
+            var tooltip = $"Codex: {fiveHourText} · weekly {weeklyRemaining:0}%";
             trayIcon.Text = tooltip[..Math.Min(63, tooltip.Length)];
             await NotifyIfUsageLimitReachedAsync(current);
             Invalidate();
@@ -476,7 +501,7 @@ internal sealed class WidgetForm : Form
 
     private static string BuildNotificationBody(UsageSnapshot snapshot, bool isTest = false)
     {
-        var resetText = snapshot.ResetsAt.ToLocalTime().ToString("ddd, MMM d h:mm tt");
+        var resetText = snapshot.Weekly.ResetsAt.ToLocalTime().ToString("ddd, MMM d h:mm tt");
         var prefix = isTest ? "TEST: " : string.Empty;
         return $"{prefix}Codex has reached 0% usage (100% available) at {DateTimeOffset.Now:ddd, MMM d h:mm tt}. " +
             $"Current window resets at {resetText}.";
@@ -489,15 +514,20 @@ internal sealed class WidgetForm : Form
         g.DrawLine(controlPen, Width - 12, 13, Width - 20, 21);
     }
 
-    private void DrawResetSchedule(Graphics g, UsageSnapshot usage)
+    private void DrawResetSchedule(
+        Graphics g,
+        UsageWindow window,
+        IReadOnlyList<DateTimeOffset> resetExpirations,
+        float x,
+        float y)
     {
-        var reset = usage.ResetsAt.ToLocalTime();
-        if (usage.ResetExpirations.Count == 0)
+        var reset = window.ResetsAt.ToLocalTime();
+        if (resetExpirations.Count == 0)
         {
             var resetText = reset.Date == DateTimeOffset.Now.Date
                 ? $"Resets today · {reset:h:mm tt}"
                 : $"Resets {reset:ddd, MMM d} · {reset:h:mm tt}";
-            g.DrawString(resetText, resetFont, textBrush, 104, 41);
+            g.DrawString(resetText, resetFont, textBrush, x, y);
             return;
         }
 
@@ -505,25 +535,24 @@ internal sealed class WidgetForm : Form
         {
             $"Resets {reset:ddd, MMM d} - {reset:h:mm tt}"
         };
-        lines.AddRange(usage.ResetExpirations.Select(expiration =>
+        lines.AddRange(resetExpirations.Select(expiration =>
         {
             var localExpiration = expiration.ToLocalTime();
             return $"Reset expires {localExpiration:ddd, MMM d} - {localExpiration:h:mm tt}";
         }));
 
         var font = lines.Count <= 3 ? compactResetFont : denseResetFont;
-        var lineHeight = Math.Min(14f, 44f / lines.Count);
-        var y = 31f;
+        var lineHeight = Math.Min(12f, 35f / lines.Count);
         foreach (var line in lines)
         {
-            g.DrawString(line, font, textBrush, 104, y);
+            g.DrawString(line, font, textBrush, x, y);
             y += lineHeight;
         }
     }
 
-    private void DrawProgress(Graphics g, double percent, Color color)
+    private void DrawProgress(Graphics g, double percent, Color color, int y)
     {
-        var track = new Rectangle(16, Height - 17, Width - 32, 4);
+        var track = new Rectangle(16, y, Width - 32, 4);
         g.FillRectangle(trackBrush, track);
         usageBrush.Color = color;
         if (percent > 0) g.FillRectangle(usageBrush, track.X, track.Y,
@@ -546,15 +575,15 @@ internal sealed class WidgetForm : Form
         var previousUsedPercent = settings.LastObservedWeeklyUsedPercent;
         var lastNotificationReset = settings.LastUsageLimitNotificationResetAt;
         var alreadyNotifiedForWindow = lastNotificationReset.HasValue &&
-            (current.ResetsAt - lastNotificationReset.Value).Duration() <= ResetTimeMatchTolerance;
+            (current.Weekly.ResetsAt - lastNotificationReset.Value).Duration() <= ResetTimeMatchTolerance;
         var becameFullyAvailable = previousUsedPercent.HasValue &&
             previousUsedPercent.Value > FullAvailabilityUsedPercent &&
-            current.UsedPercent <= FullAvailabilityUsedPercent;
-        var observationChanged = settings.LastObservedWeeklyUsedPercent != current.UsedPercent;
+            current.Weekly.UsedPercent <= FullAvailabilityUsedPercent;
+        var observationChanged = settings.LastObservedWeeklyUsedPercent != current.Weekly.UsedPercent;
 
         // Persist changed observations first. If the app restarts, or notification
         // delivery fails, this transition cannot be handled a second time.
-        settings.LastObservedWeeklyUsedPercent = current.UsedPercent;
+        settings.LastObservedWeeklyUsedPercent = current.Weekly.UsedPercent;
 
         if (!settings.NotifyOnUsageLimitReached || !becameFullyAvailable || alreadyNotifiedForWindow)
         {
@@ -566,7 +595,7 @@ internal sealed class WidgetForm : Form
         // The reset can happen at any time, so do not infer it from the expected
         // weekly schedule. The usage transition above is the event; the reset time
         // is retained only as a narrow guard against duplicate readings.
-        settings.LastUsageLimitNotificationResetAt = current.ResetsAt;
+        settings.LastUsageLimitNotificationResetAt = current.Weekly.ResetsAt;
         settings.Save();
 
         var sent = await SendUsageLimitEmailAsync(current);
@@ -582,8 +611,8 @@ internal sealed class WidgetForm : Form
     private Task<bool> SendTestUsageAlertAsync()
     {
         var test = new UsageSnapshot(
-            0,
-            DateTimeOffset.UtcNow.AddHours(24),
+            new UsageWindow(0, DateTimeOffset.UtcNow.AddHours(5)),
+            new UsageWindow(0, DateTimeOffset.UtcNow.AddDays(7)),
             DateTimeOffset.UtcNow,
             Array.Empty<DateTimeOffset>());
         return SendUsageLimitEmailAsync(test, isTest: true, forceSend: true);

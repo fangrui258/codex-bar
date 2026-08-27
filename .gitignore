@@ -2,6 +2,7 @@
 [Bb]in/
 [Oo]bj/
 [Aa]rtifacts/
+.build/
 publish/
 dist/
 
