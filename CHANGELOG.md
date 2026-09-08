@@ -4,6 +4,8 @@ All notable changes to CodexBar are documented here.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-09-08
+
 ### Documentation
 
 - Uses the published x64 asset names and links directly to the lightweight and portable downloads.
@@ -56,7 +58,8 @@ All notable changes to CodexBar are documented here.
 - Live weekly Codex capacity and reset-time display.
 - Configurable refresh interval, transparency, always-on-top mode, Windows startup, and notification-area support.
 
-[Unreleased]: https://github.com/fangrui258/codex-bar/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/fangrui258/codex-bar/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/fangrui258/codex-bar/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/fangrui258/codex-bar/releases/tag/v1.2.0
 [1.1.1]: https://github.com/jspann21/codex-bar/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/jspann21/codex-bar/compare/v1.0.0...v1.1.0
