@@ -10,7 +10,8 @@ var tests = new (string Name, Action Run)[]
     ("prefers the account-wide codex bucket", PrefersCodexBucket),
     ("keeps weekly usage when five-hour usage is absent", AllowsMissingFiveHourWindow),
     ("clamps percentages and preserves available reset credits", ClampsAndParsesResetCredits),
-    ("rejects a response without weekly usage", RejectsMissingWeeklyWindow)
+    ("rejects a response without weekly usage", RejectsMissingWeeklyWindow),
+    ("detects an external Codex authentication change once", DetectsAuthenticationChange)
 };
 
 var failures = 0;
@@ -174,6 +175,29 @@ static UsageSnapshot Parse(string json)
 
 static UsageWindow Required(UsageWindow? window, string label) =>
     window ?? throw new InvalidOperationException($"Expected {label} to be present.");
+
+static void DetectsAuthenticationChange()
+{
+    var directory = Path.Combine(Path.GetTempPath(), $"codexbar-auth-{Guid.NewGuid():N}");
+    var authPath = Path.Combine(directory, "auth.json");
+    Directory.CreateDirectory(directory);
+    try
+    {
+        File.WriteAllText(authPath, "account-one");
+        var originalWriteTime = File.GetLastWriteTimeUtc(authPath);
+        var monitor = new AuthenticationFileMonitor(authPath);
+
+        Equal(false, monitor.HasChanged(), "initial observation");
+        File.WriteAllText(authPath, "account-two-with-a-different-size");
+        File.SetLastWriteTimeUtc(authPath, originalWriteTime.AddSeconds(1));
+        Equal(true, monitor.HasChanged(), "changed authentication");
+        Equal(false, monitor.HasChanged(), "unchanged authentication after restart");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
 
 static void SaveVisualSnapshot(string path)
 {

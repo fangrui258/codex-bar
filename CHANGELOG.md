@@ -10,6 +10,11 @@ All notable changes to CodexBar are documented here.
 - Clarifies that prebuilt releases currently target x64 while ARM64 remains available as a source build.
 - Describes the exact rate-limit and reset-credit metadata CodexBar reads.
 
+### Fixed
+
+- Restarts the private Codex app-server when an external account switcher replaces `auth.json`, preventing the previous account's cached limits from remaining visible.
+- Treats the first reading after an account switch as a notification baseline so one account cannot trigger another account's weekly-reset alert.
+
 ## [1.2.0] - 2026-08-27
 
 ### Added

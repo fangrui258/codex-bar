@@ -209,6 +209,17 @@ internal sealed class WidgetForm : Form
         refreshTimer.Stop();
         try
         {
+            var accountChanged = liveClient.RestartIfAuthenticationChanged();
+            if (accountChanged)
+            {
+                snapshot = null;
+                liveConnected = false;
+                readError = "Account switching…";
+                trayIcon.Text = "CodexBar — switching account";
+                Invalidate();
+                Update();
+            }
+
             var current = await liveClient.ReadUsageAsync();
             snapshot = current;
             liveConnected = true;
@@ -219,7 +230,18 @@ internal sealed class WidgetForm : Form
                 : "5h unavailable";
             var tooltip = $"Codex: {fiveHourText} · weekly {weeklyRemaining:0}%";
             trayIcon.Text = tooltip[..Math.Min(63, tooltip.Length)];
-            await NotifyIfUsageLimitReachedAsync(current);
+            if (accountChanged)
+            {
+                // Notification history belongs to the previous account. Treat the
+                // first reading after a switch as the new account's baseline.
+                settings.LastObservedWeeklyUsedPercent = current.Weekly.UsedPercent;
+                settings.LastUsageLimitNotificationResetAt = null;
+                settings.Save();
+            }
+            else
+            {
+                await NotifyIfUsageLimitReachedAsync(current);
+            }
             Invalidate();
         }
         catch (Exception ex)

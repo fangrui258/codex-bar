@@ -141,6 +141,8 @@ Open Codex and sign in. CodexBar will reuse that authenticated session on its ne
 
 Choose **Refresh now** to request the live limit immediately. If the widget says **Offline**, open or update Codex and confirm that you are signed in; live access will be retried automatically.
 
+If an external account switcher replaces Codex's `auth.json`, CodexBar detects the change on its next refresh, restarts its private app-server process, and loads the new account's limits. Provider-only switches that deliberately preserve the official Codex login do not change the account whose ChatGPT limits are displayed.
+
 ### The widget disappeared
 
 Look for the CodexBar icon in the notification area, including the overflow menu, and double-click it. Only **Exit** fully closes the application.

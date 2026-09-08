@@ -17,6 +17,7 @@ internal sealed record UsageSnapshot(
 internal sealed class CodexAppServerClient : IDisposable
 {
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(12);
+    private readonly AuthenticationFileMonitor authenticationFile = AuthenticationFileMonitor.CreateDefault();
     private Process? process;
     private StreamWriter? input;
     private StreamReader? output;
@@ -26,6 +27,7 @@ internal sealed class CodexAppServerClient : IDisposable
     public async Task<UsageSnapshot> ReadUsageAsync()
     {
         ObjectDisposedException.ThrowIf(disposed, this);
+        RestartIfAuthenticationChanged();
 
         Exception? firstFailure = null;
         for (var attempt = 0; attempt < 2; attempt++)
@@ -44,6 +46,15 @@ internal sealed class CodexAppServerClient : IDisposable
         }
 
         throw new InvalidOperationException("Codex could not return live rate limits.", firstFailure);
+    }
+
+    public bool RestartIfAuthenticationChanged()
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (!authenticationFile.HasChanged()) return false;
+
+        StopProcess();
+        return true;
     }
 
     private async Task EnsureStartedAsync()
