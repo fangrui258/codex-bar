@@ -8,6 +8,7 @@ All notable changes to CodexBar are documented here.
 
 ### Documentation
 
+- Adds complete English and Simplified Chinese README versions with language navigation.
 - Uses the published x64 asset names and links directly to the lightweight and portable downloads.
 - Clarifies that prebuilt releases currently target x64 while ARM64 remains available as a source build.
 - Describes the exact rate-limit and reset-credit metadata CodexBar reads.

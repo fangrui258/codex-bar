@@ -1,5 +1,7 @@
 # CodexBar
 
+**English** | [简体中文](README.zh-CN.md)
+
 **A tiny Windows desktop widget for keeping an eye on your 5-hour and weekly Codex limits.**
 
 CodexBar itself requires no login, API key, or account setup—it automatically reuses your existing signed-in Codex session. It shows the percentage remaining and next reset for both the 5-hour and weekly Codex windows, plus the expiration dates and times of every available banked reset. It stays out of the way as a compact, draggable widget and continues updating from the Windows notification area.
