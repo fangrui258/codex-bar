@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -13,6 +15,12 @@ internal enum BridgeSetupResult
 internal static class AntigravityStatusBridge
 {
     public const string BridgeArgument = "--antigravity-statusline";
+    private const string ShimFileName = "codexbar-antigravity-statusline.cmd";
+    private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetShortPathName(string lpszLongPath, StringBuilder lpszShortPath, uint cchBuffer);
 
     public static int RunFromStandardInput() =>
         Run(Console.In, AntigravityUsageProvider.ResolveStatusFilePath());
@@ -45,19 +53,30 @@ internal static class AntigravityStatusBridge
         "antigravity-cli",
         "settings.json");
 
+    public static string GetBridgeShimPath() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "CodexBar",
+        ShimFileName);
+
     public static string BuildBridgeCommand(string executablePath) =>
+        ResolveCommandPath(GetBridgeShimPath());
+
+    public static string BuildDirectCommand(string executablePath) =>
         $"\"{executablePath}\" {BridgeArgument}";
 
     public static BridgeSetupResult ConfigureCliSettings(string executablePath, out string? existingCommand) =>
-        ConfigureCliSettingsAt(GetCliSettingsPath(), executablePath, out existingCommand);
+        ConfigureCliSettingsAt(GetCliSettingsPath(), executablePath, out existingCommand, GetBridgeShimPath());
 
     internal static BridgeSetupResult ConfigureCliSettingsAt(
         string settingsPath,
         string executablePath,
-        out string? existingCommand)
+        out string? existingCommand,
+        string? shimPath = null)
     {
         existingCommand = null;
-        var expectedCommand = BuildBridgeCommand(executablePath);
+        var targetShimPath = shimPath ?? Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(settingsPath))!,
+            ShimFileName);
 
         JsonObject root;
         if (File.Exists(settingsPath))
@@ -73,13 +92,16 @@ internal static class AntigravityStatusBridge
             root = new JsonObject();
         }
 
+        var shimContent = BuildShimContent(executablePath);
         if (root["statusLine"] is JsonObject existingStatusLine &&
             existingStatusLine["command"]?.GetValue<string>() is { } currentCmd &&
             !string.IsNullOrWhiteSpace(currentCmd))
         {
-            if (currentCmd.Contains(BridgeArgument, StringComparison.OrdinalIgnoreCase))
+            if (IsManagedCommand(currentCmd))
             {
-                if (string.Equals(currentCmd.Trim(), expectedCommand, StringComparison.OrdinalIgnoreCase) &&
+                WriteAtomic(targetShimPath, shimContent);
+                var expectedCmd = ResolveCommandPath(targetShimPath);
+                if (string.Equals(currentCmd.Trim(), expectedCmd, StringComparison.OrdinalIgnoreCase) &&
                     existingStatusLine["enabled"]?.GetValue<bool>() != false)
                 {
                     return BridgeSetupResult.AlreadyConfigured;
@@ -91,11 +113,16 @@ internal static class AntigravityStatusBridge
                 return BridgeSetupResult.CustomCommandConflict;
             }
         }
+        else
+        {
+            WriteAtomic(targetShimPath, shimContent);
+        }
 
+        var command = ResolveCommandPath(targetShimPath);
         root["statusLine"] = new JsonObject
         {
             ["type"] = "command",
-            ["command"] = expectedCommand,
+            ["command"] = command,
             ["padding"] = 0,
             ["enabled"] = true,
             ["stack_with_default"] = true
@@ -106,6 +133,35 @@ internal static class AntigravityStatusBridge
         return BridgeSetupResult.Configured;
     }
 
+    private static bool IsManagedCommand(string command) =>
+        command.Contains("antigravity-statusline", StringComparison.OrdinalIgnoreCase);
+
+    internal static string BuildShimContent(string executablePath) =>
+        $"@echo off\r\nchcp 65001 >nul 2>nul\r\n\"{executablePath}\" {BridgeArgument}\r\n";
+
+    private static string ResolveCommandPath(string path)
+    {
+        if (!path.Contains(' ', StringComparison.Ordinal))
+            return path;
+
+        var buffer = new StringBuilder(260);
+        var length = GetShortPathName(path, buffer, (uint)buffer.Capacity);
+        if (length > buffer.Capacity)
+        {
+            buffer.EnsureCapacity((int)length);
+            length = GetShortPathName(path, buffer, (uint)buffer.Capacity);
+        }
+
+        if (length > 0)
+        {
+            var shortPath = buffer.ToString();
+            if (!shortPath.Contains(' ', StringComparison.Ordinal))
+                return shortPath;
+        }
+
+        return path;
+    }
+
     internal static void WriteAtomic(string destinationPath, string content)
     {
         var directory = Path.GetDirectoryName(Path.GetFullPath(destinationPath))!;
@@ -113,7 +169,7 @@ internal static class AntigravityStatusBridge
         var tempPath = Path.Combine(directory, $"{Path.GetFileName(destinationPath)}.{Guid.NewGuid():N}.tmp");
         try
         {
-            File.WriteAllText(tempPath, content);
+            File.WriteAllText(tempPath, content, Utf8NoBom);
             if (File.Exists(destinationPath))
                 File.Replace(tempPath, destinationPath, destinationBackupFileName: null);
             else

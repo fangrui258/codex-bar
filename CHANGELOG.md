@@ -4,6 +4,13 @@ All notable changes to CodexBar are documented here.
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-26
+
+### Fixed
+
+- Fixes Antigravity CLI (`agy`) `statusLine` invocation failing on Windows when the `CodexBar` executable path contains spaces, parentheses, or non-ASCII characters by routing through a quote-free UTF-8 batch shim (`%LOCALAPPDATA%\CodexBar\codexbar-antigravity-statusline.cmd`) with short-path fallback.
+- Automatically upgrades existing quoted `--antigravity-statusline` entries in `~/.gemini/antigravity-cli/settings.json` to the batch shim while preserving unrelated custom `statusLine` scripts.
+
 ## [1.3.0] - 2026-11-26
 
 ### Added
@@ -72,7 +79,8 @@ All notable changes to CodexBar are documented here.
 - Live weekly Codex capacity and reset-time display.
 - Configurable refresh interval, transparency, always-on-top mode, Windows startup, and notification-area support.
 
-[Unreleased]: https://github.com/fangrui258/codex-bar/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/fangrui258/codex-bar/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/fangrui258/codex-bar/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/fangrui258/codex-bar/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/fangrui258/codex-bar/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/fangrui258/codex-bar/releases/tag/v1.2.0

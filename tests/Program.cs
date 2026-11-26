@@ -352,16 +352,31 @@ static void ConfiguresAndPreservesAntigravityCliSettings()
     try
     {
         var settingsPath = Path.Combine(directory, "settings.json");
-        var exePath = @"C:\Tools\CodexBar.exe";
+        var shimPath = Path.Combine(directory, "codexbar-antigravity-statusline.cmd");
+        var exePath = @"D:\浏览器下载\CodexBar-win-x64 (2).exe";
 
-        var first = AntigravityStatusBridge.ConfigureCliSettingsAt(settingsPath, exePath, out _);
+        var first = AntigravityStatusBridge.ConfigureCliSettingsAt(settingsPath, exePath, out _, shimPath);
         Equal(BridgeSetupResult.Configured, first, "initial bridge setup");
+        if (!File.Exists(shimPath))
+            throw new InvalidOperationException("Expected batch shim file to be created.");
+        var shimText = File.ReadAllText(shimPath);
+        if (!shimText.Contains("chcp 65001", StringComparison.Ordinal) ||
+            !shimText.Contains(exePath, StringComparison.Ordinal))
+            throw new InvalidOperationException("Expected batch shim to invoke executable under UTF-8.");
 
-        var second = AntigravityStatusBridge.ConfigureCliSettingsAt(settingsPath, exePath, out _);
+        var second = AntigravityStatusBridge.ConfigureCliSettingsAt(settingsPath, exePath, out _, shimPath);
         Equal(BridgeSetupResult.AlreadyConfigured, second, "idempotent bridge setup");
 
+        var legacyJson = JsonSerializer.Serialize(new
+        {
+            statusLine = new { type = "command", command = $"\"{exePath}\" --antigravity-statusline" }
+        });
+        File.WriteAllText(settingsPath, legacyJson);
+        var upgraded = AntigravityStatusBridge.ConfigureCliSettingsAt(settingsPath, exePath, out _, shimPath);
+        Equal(BridgeSetupResult.Configured, upgraded, "upgrades legacy quoted bridge command to shim");
+
         File.WriteAllText(settingsPath, """{"statusLine":{"type":"command","command":"my-custom-statusline.cmd"}}""");
-        var third = AntigravityStatusBridge.ConfigureCliSettingsAt(settingsPath, exePath, out var existing);
+        var third = AntigravityStatusBridge.ConfigureCliSettingsAt(settingsPath, exePath, out var existing, shimPath);
         Equal(BridgeSetupResult.CustomCommandConflict, third, "custom command preserved");
         Equal("my-custom-statusline.cmd", existing, "reported existing command");
     }

@@ -660,7 +660,7 @@ internal sealed class WidgetForm : Form
                         MessageBoxButtons.YesNo,
                         MessageBoxIcon.Warning);
                     if (copyResult == DialogResult.Yes)
-                        Clipboard.SetText(command);
+                        Clipboard.SetText(AntigravityStatusBridge.BuildDirectCommand(executablePath));
                     break;
             }
         }
