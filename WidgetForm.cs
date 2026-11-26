@@ -1,7 +1,7 @@
 using System.Diagnostics;
+using System.Drawing.Drawing2D;
 using System.Net;
 using System.Net.Mail;
-using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 
 namespace CodexBar;
@@ -11,9 +11,10 @@ internal sealed class WidgetForm : Form
     private const int WmNchittest = 0x0084;
     private const int HtCaption = 2;
     private const int WidgetWidth = 286;
-    private const int WidgetHeight = 160;
-    private const int FiveHourProgressY = 78;
-    private const int WeeklyProgressY = WidgetHeight - 17;
+    private const int BaseWidgetHeight = 160;
+    private const int ExtraRowStride = 65;
+    private const int MaxVisibleLanes = 6;
+    private const int HeaderHeight = 30;
     private const uint SwpNoSize = 0x0001;
     private const uint SwpNoMove = 0x0002;
     private const uint SwpNoActivate = 0x0010;
@@ -22,13 +23,19 @@ internal sealed class WidgetForm : Form
     private const double FullAvailabilityUsedPercent = 0.001;
     private static readonly TimeSpan NotificationDeliveryTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ResetTimeMatchTolerance = TimeSpan.FromHours(1);
+
     private readonly AppSettings settings = AppSettings.Load();
-    private readonly CodexAppServerClient liveClient = new();
+    private readonly IUsageProvider[] providers;
+    private readonly Dictionary<string, ProviderSnapshot> snapshots = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string?> readErrors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Rectangle> tabRects = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ToolStripMenuItem> providerMenuItems = new(StringComparer.OrdinalIgnoreCase);
     private readonly Icon appIcon;
     private readonly NotifyIcon trayIcon;
     private readonly System.Windows.Forms.Timer refreshTimer;
     private readonly System.Windows.Forms.Timer positionSaveTimer;
     private readonly SemaphoreSlim refreshGate = new(1, 1);
+
     private readonly Pen borderPen = new(Color.FromArgb(42, 58, 49));
     private readonly Pen controlPen = new(Color.FromArgb(130, 150, 138), 1.2f);
     private readonly Font titleFont = new("Segoe UI Semibold", 8.5f);
@@ -38,13 +45,14 @@ internal sealed class WidgetForm : Form
     private readonly Font denseResetFont = new("Segoe UI", 6.5f);
     private readonly SolidBrush dimBrush = new(Color.FromArgb(143, 160, 150));
     private readonly SolidBrush statusOkBrush = new(Color.FromArgb(84, 235, 120));
+    private readonly SolidBrush statusStandbyBrush = new(Color.FromArgb(148, 160, 153));
     private readonly SolidBrush statusOfflineBrush = new(Color.FromArgb(239, 128, 128));
     private readonly SolidBrush textBrush = new(Color.FromArgb(225, 235, 229));
     private readonly SolidBrush trackBrush = new(Color.FromArgb(31, 39, 34));
     private readonly SolidBrush usageBrush = new(Color.FromArgb(46, 220, 112));
-    private UsageSnapshot? snapshot;
-    private bool liveConnected;
-    private string? readError;
+    private readonly SolidBrush activeTabAccentBrush = new(Color.FromArgb(46, 220, 112));
+
+    private string activeProviderId;
     private bool exiting;
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
@@ -63,12 +71,22 @@ internal sealed class WidgetForm : Form
         uint flags);
 
     public WidgetForm()
+        : this(new IUsageProvider[] { new CodexUsageProvider(), new AntigravityUsageProvider() })
     {
+    }
+
+    internal WidgetForm(IUsageProvider[] customProviders)
+    {
+        providers = customProviders;
+        activeProviderId = providers.Any(p => string.Equals(p.Id, settings.ActiveProvider, StringComparison.OrdinalIgnoreCase))
+            ? providers.First(p => string.Equals(p.Id, settings.ActiveProvider, StringComparison.OrdinalIgnoreCase)).Id
+            : providers[0].Id;
+
         Text = "CodexBar";
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = true;
         StartPosition = FormStartPosition.Manual;
-        ClientSize = new Size(WidgetWidth, WidgetHeight);
+        ClientSize = new Size(WidgetWidth, BaseWidgetHeight);
         MinimumSize = MaximumSize = Size;
         BackColor = Color.FromArgb(8, 10, 9);
         DoubleBuffered = true;
@@ -77,6 +95,9 @@ internal sealed class WidgetForm : Form
         Font = new Font("Segoe UI", 9f, FontStyle.Regular, GraphicsUnit.Point);
         appIcon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!) ?? CreateTrayIcon();
         Icon = appIcon;
+
+        using (var g = CreateGraphics())
+            ComputeTabRects(g);
 
         var area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1920, 1080);
         Location = settings.X.HasValue && settings.Y.HasValue
@@ -125,58 +146,211 @@ internal sealed class WidgetForm : Form
         if (Visible) ApplyAlwaysOnTopState();
     }
 
+    internal void SetSnapshotForTest(ProviderSnapshot snapshot)
+    {
+        snapshots[snapshot.ProviderId] = snapshot;
+        readErrors[snapshot.ProviderId] = null;
+        UpdateWindowHeightForActiveProvider();
+        Invalidate();
+    }
+
+    internal void SwitchProvider(string providerId, bool persist = true)
+    {
+        var target = providers.FirstOrDefault(p => string.Equals(p.Id, providerId, StringComparison.OrdinalIgnoreCase));
+        if (target is null) return;
+
+        activeProviderId = target.Id;
+        foreach (var (id, item) in providerMenuItems)
+            item.Checked = string.Equals(id, activeProviderId, StringComparison.OrdinalIgnoreCase);
+
+        if (persist && !string.Equals(settings.ActiveProvider, activeProviderId, StringComparison.OrdinalIgnoreCase))
+        {
+            settings.ActiveProvider = activeProviderId;
+            settings.Save();
+        }
+
+        UpdateWindowHeightForActiveProvider();
+        Invalidate();
+    }
+
+    private IUsageProvider ActiveProvider =>
+        providers.First(p => string.Equals(p.Id, activeProviderId, StringComparison.OrdinalIgnoreCase));
+
+    private void ComputeTabRects(Graphics g)
+    {
+        tabRects.Clear();
+        float x = 22f;
+        const int tabHeight = 22;
+        const int tabTop = 4;
+
+        for (var i = 0; i < providers.Length; i++)
+        {
+            var provider = providers[i];
+            var glyphWidth = g.MeasureString(provider.TabLabel, titleFont, PointF.Empty, StringFormat.GenericTypographic).Width;
+            var width = (int)Math.Ceiling(glyphWidth) + 8;
+            tabRects[provider.Id] = new Rectangle((int)Math.Floor(x), tabTop, width, tabHeight);
+            x += width + 10f;
+        }
+    }
+
+    private void UpdateWindowHeightForActiveProvider()
+    {
+        snapshots.TryGetValue(activeProviderId, out var activeSnapshot);
+        var visibleLaneCount = activeSnapshot is { Lanes.Count: > 0 }
+            ? Math.Min(activeSnapshot.Lanes.Count, MaxVisibleLanes)
+            : 2;
+
+        var desiredHeight = visibleLaneCount <= 2
+            ? BaseWidgetHeight
+            : BaseWidgetHeight + (visibleLaneCount - 2) * ExtraRowStride;
+
+        if (ClientSize.Height == desiredHeight) return;
+
+        MinimumSize = Size.Empty;
+        MaximumSize = Size.Empty;
+        ClientSize = new Size(WidgetWidth, desiredHeight);
+        MinimumSize = MaximumSize = Size;
+        Location = KeepVisible(Location);
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
+        ComputeTabRects(g);
 
-        var titleY = 14f;
-        var codexHeight = g.MeasureString("CODEX", titleFont).Height;
-        var dotY = titleY + (codexHeight - 6f) / 2f;
-        var statusBrush = liveConnected ? statusOkBrush : statusOfflineBrush;
+        snapshots.TryGetValue(activeProviderId, out var activeSnapshot);
+        readErrors.TryGetValue(activeProviderId, out var activeError);
+        var activeProvider = ActiveProvider;
+        var activeStatus = activeSnapshot?.Status ?? ProviderStatus.Offline;
+
+        const float titleY = 12f;
+        var labelHeight = g.MeasureString(activeProvider.TabLabel, titleFont).Height;
+        var dotY = titleY + (labelHeight - 6f) / 2f;
+        var statusBrush = activeStatus switch
+        {
+            ProviderStatus.Online => statusOkBrush,
+            ProviderStatus.Standby => statusStandbyBrush,
+            _ => statusOfflineBrush
+        };
         g.FillEllipse(statusBrush, 10, dotY, 6, 6);
         g.DrawRectangle(borderPen, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
 
-        g.DrawString("CODEX  ·  LIMITS", titleFont, dimBrush, 20, titleY);
+        DrawTabs(g, titleY, activeStatus);
         DrawWindowControls(g);
-        g.DrawString("5-HOUR LEFT", titleFont, dimBrush, 14, 31);
-        g.DrawString("WEEKLY LEFT", titleFont, dimBrush, 14, 88);
-        g.DrawLine(borderPen, 16, 84, Width - 16, 84);
 
-        if (snapshot is null)
+        if (activeSnapshot is null || activeSnapshot.Lanes.Count == 0)
         {
-            var message = readError ?? "Waiting for Codex usage…";
-            g.DrawString("—%", percentFont, textBrush, 14, 43);
-            g.DrawString(message, resetFont, dimBrush, 104, 52);
-            g.DrawString("—%", percentFont, textBrush, 14, 100);
-            DrawProgress(g, 0, Color.FromArgb(45, 62, 52), FiveHourProgressY);
-            DrawProgress(g, 0, Color.FromArgb(45, 62, 52), WeeklyProgressY);
+            DrawEmptyOrStatusState(g, activeProvider, activeSnapshot, activeError);
             return;
         }
 
-        if (snapshot.FiveHour is { } fiveHour)
+        var visibleCount = Math.Min(activeSnapshot.Lanes.Count, MaxVisibleLanes);
+        for (var i = 0; i < visibleCount; i++)
         {
-            var fiveHourRemaining = 100 - fiveHour.UsedPercent;
-            var fiveHourColor = RemainingColor(fiveHourRemaining);
-            usageBrush.Color = fiveHourColor;
-            g.DrawString($"{fiveHourRemaining:0}%", percentFont, usageBrush, 14, 43);
-            DrawResetSchedule(g, fiveHour, Array.Empty<DateTimeOffset>(), 104, 52);
-            DrawProgress(g, fiveHourRemaining, fiveHourColor, FiveHourProgressY);
+            var lane = activeSnapshot.Lanes[i];
+            DrawLaneRow(g, lane, i, visibleCount);
+        }
+    }
+
+    private void DrawTabs(Graphics g, float titleY, ProviderStatus activeStatus)
+    {
+        for (var i = 0; i < providers.Length; i++)
+        {
+            var provider = providers[i];
+            var rect = tabRects[provider.Id];
+            var isActive = string.Equals(provider.Id, activeProviderId, StringComparison.OrdinalIgnoreCase);
+            var glyphWidth = g.MeasureString(provider.TabLabel, titleFont, PointF.Empty, StringFormat.GenericTypographic).Width;
+
+            g.DrawString(provider.TabLabel, titleFont, isActive ? textBrush : dimBrush, new PointF(rect.X + 4, titleY), StringFormat.GenericTypographic);
+
+            if (isActive)
+            {
+                activeTabAccentBrush.Color = activeStatus switch
+                {
+                    ProviderStatus.Online => statusOkBrush.Color,
+                    ProviderStatus.Standby => statusStandbyBrush.Color,
+                    _ => statusOfflineBrush.Color
+                };
+                g.FillRectangle(activeTabAccentBrush, rect.X + 4, HeaderHeight - 3, Math.Max(16f, glyphWidth), 2f);
+            }
+
+            if (i < providers.Length - 1)
+            {
+                var sepX = rect.Right + 3f;
+                g.DrawString("·", titleFont, dimBrush, new PointF(sepX, titleY), StringFormat.GenericTypographic);
+            }
+        }
+    }
+
+    private void DrawEmptyOrStatusState(
+        Graphics g,
+        IUsageProvider activeProvider,
+        ProviderSnapshot? activeSnapshot,
+        string? activeError)
+    {
+        var isCodex = string.Equals(activeProvider.Id, CodexUsageProvider.ProviderId, StringComparison.OrdinalIgnoreCase);
+        var primaryLabel = isCodex ? "5-HOUR LEFT" : "STATUS";
+        var secondaryLabel = isCodex ? "WEEKLY LEFT" : "SETUP HINT";
+
+        g.DrawString(primaryLabel, titleFont, dimBrush, 14, 31);
+        g.DrawString(secondaryLabel, titleFont, dimBrush, 14, 88);
+        g.DrawLine(borderPen, 16, 84, Width - 16, 84);
+
+        var primaryMessage = activeSnapshot?.StatusMessage
+            ?? activeError
+            ?? $"Waiting for {activeProvider.DisplayName} usage…";
+        g.DrawString("—%", percentFont, textBrush, 14, 43);
+        g.DrawString(primaryMessage, resetFont, dimBrush, new RectangleF(104, 48, Width - 116, 34));
+
+        if (isCodex)
+        {
+            g.DrawString("—%", percentFont, textBrush, 14, 100);
         }
         else
         {
-            g.DrawString("—%", percentFont, textBrush, 14, 43);
-            g.DrawString("Not reported by Codex", resetFont, dimBrush, 104, 52);
-            DrawProgress(g, 0, Color.FromArgb(45, 62, 52), FiveHourProgressY);
+            var hint = activeSnapshot?.Status == ProviderStatus.Standby
+                ? "Start Antigravity or agy CLI to read live limits."
+                : "Right-click tray icon → Setup Antigravity CLI bridge…";
+            g.DrawString(hint, compactResetFont, dimBrush, new RectangleF(14, 106, Width - 28, 34));
         }
 
-        var weeklyRemaining = 100 - snapshot.Weekly.UsedPercent;
-        var weeklyColor = RemainingColor(weeklyRemaining);
-        usageBrush.Color = weeklyColor;
-        g.DrawString($"{weeklyRemaining:0}%", percentFont, usageBrush, 14, 100);
-        DrawResetSchedule(g, snapshot.Weekly, snapshot.ResetExpirations, 104, 104);
-        DrawProgress(g, weeklyRemaining, weeklyColor, WeeklyProgressY);
+        DrawProgress(g, 0, Color.FromArgb(45, 62, 52), 78);
+        DrawProgress(g, 0, Color.FromArgb(45, 62, 52), BaseWidgetHeight - 17);
+    }
+
+    private void DrawLaneRow(Graphics g, QuotaLane lane, int rowIndex, int totalRows)
+    {
+        var labelY = rowIndex == 0 ? 31 : 86 + (rowIndex - 1) * ExtraRowStride + 2;
+        var percentY = rowIndex == 0 ? 43 : 86 + (rowIndex - 1) * ExtraRowStride + 14;
+        var progressY = rowIndex == 0 ? 78 : 86 + (rowIndex - 1) * ExtraRowStride + 57;
+        var dividerY = rowIndex == 0 ? 84 : 86 + (rowIndex - 1) * ExtraRowStride + 63;
+
+        g.DrawString(lane.Label, titleFont, dimBrush, 14, labelY);
+
+        var expirations = lane.ExpirationTimes ?? Array.Empty<DateTimeOffset>();
+        var infoY = rowIndex == 0
+            ? 52
+            : 86 + (rowIndex - 1) * ExtraRowStride + (expirations.Count > 0 ? 18 : 23);
+
+        if (lane.RemainingPercent is { } remaining)
+        {
+            var color = RemainingColor(remaining);
+            usageBrush.Color = color;
+            g.DrawString($"{remaining:0}%", percentFont, usageBrush, 14, percentY);
+            DrawResetSchedule(g, lane.ResetsAt, expirations, 104, infoY);
+            DrawProgress(g, remaining, color, progressY);
+        }
+        else
+        {
+            g.DrawString("—%", percentFont, textBrush, 14, percentY);
+            g.DrawString(lane.UnavailableText ?? "Unavailable", resetFont, dimBrush, new RectangleF(104, infoY, Width - 116, 32));
+            DrawProgress(g, 0, Color.FromArgb(45, 62, 52), progressY);
+        }
+
+        if (rowIndex < totalRows - 1)
+            g.DrawLine(borderPen, 16, dividerY, Width - 16, dividerY);
     }
 
     protected override void WndProc(ref Message m)
@@ -187,18 +361,31 @@ internal sealed class WidgetForm : Form
             var screenPoint = new Point((short)(m.LParam.ToInt64() & 0xffff),
                 (short)((m.LParam.ToInt64() >> 16) & 0xffff));
             var clientPoint = PointToClient(screenPoint);
-            var overControls = clientPoint.Y <= 30 && clientPoint.X >= Width - 60;
-            if (!overControls) m.Result = HtCaption;
+            var overControls = clientPoint.Y <= HeaderHeight && clientPoint.X >= Width - 60;
+            var overTabs = tabRects.Values.Any(rect => rect.Contains(clientPoint));
+            if (!overControls && !overTabs) m.Result = HtCaption;
         }
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
-        if (e.Button == MouseButtons.Left && e.Y <= 30 && e.X >= Width - 60)
+        if (e.Button == MouseButtons.Left && e.Y <= HeaderHeight)
         {
-            if (e.X >= Width - 30) HideToTray();
-            else Close();
-            return;
+            if (e.X >= Width - 60)
+            {
+                if (e.X >= Width - 30) HideToTray();
+                else Close();
+                return;
+            }
+
+            foreach (var (providerId, rect) in tabRects)
+            {
+                if (rect.Contains(e.Location))
+                {
+                    SwitchProvider(providerId);
+                    return;
+                }
+            }
         }
         base.OnMouseDown(e);
     }
@@ -209,46 +396,11 @@ internal sealed class WidgetForm : Form
         refreshTimer.Stop();
         try
         {
-            var accountChanged = liveClient.RestartIfAuthenticationChanged();
-            if (accountChanged)
-            {
-                snapshot = null;
-                liveConnected = false;
-                readError = "Account switching…";
-                trayIcon.Text = "CodexBar — switching account";
-                Invalidate();
-                Update();
-            }
+            var tasks = providers.Select(RefreshProviderAsync).ToArray();
+            await Task.WhenAll(tasks);
 
-            var current = await liveClient.ReadUsageAsync();
-            snapshot = current;
-            liveConnected = true;
-            readError = null;
-            var weeklyRemaining = 100 - current.Weekly.UsedPercent;
-            var fiveHourText = current.FiveHour is { } fiveHour
-                ? $"5h {100 - fiveHour.UsedPercent:0}%"
-                : "5h unavailable";
-            var tooltip = $"Codex: {fiveHourText} · weekly {weeklyRemaining:0}%";
-            trayIcon.Text = tooltip[..Math.Min(63, tooltip.Length)];
-            if (accountChanged)
-            {
-                // Notification history belongs to the previous account. Treat the
-                // first reading after a switch as the new account's baseline.
-                settings.LastObservedWeeklyUsedPercent = current.Weekly.UsedPercent;
-                settings.LastUsageLimitNotificationResetAt = null;
-                settings.Save();
-            }
-            else
-            {
-                await NotifyIfUsageLimitReachedAsync(current);
-            }
-            Invalidate();
-        }
-        catch (Exception ex)
-        {
-            liveConnected = false;
-            readError = snapshot is null ? "Usage unavailable" : null;
-            Debug.WriteLine(ex);
+            UpdateTrayTooltip();
+            UpdateWindowHeightForActiveProvider();
             Invalidate();
         }
         finally
@@ -258,11 +410,114 @@ internal sealed class WidgetForm : Form
         }
     }
 
+    private async Task RefreshProviderAsync(IUsageProvider provider)
+    {
+        try
+        {
+            var accountChanged = provider.CheckAccountChanged();
+            if (accountChanged)
+            {
+                snapshots.Remove(provider.Id);
+                readErrors[provider.Id] = "Account switching…";
+                if (string.Equals(provider.Id, activeProviderId, StringComparison.OrdinalIgnoreCase))
+                {
+                    Invalidate();
+                    Update();
+                }
+            }
+
+            var current = await provider.ReadUsageAsync();
+            snapshots[provider.Id] = current;
+            readErrors[provider.Id] = null;
+
+            if (current.Status == ProviderStatus.Online)
+                await NotifyIfUsageLimitReachedAsync(current, accountChanged);
+        }
+        catch (Exception ex)
+        {
+            if (snapshots.TryGetValue(provider.Id, out var previous))
+                snapshots[provider.Id] = previous with { Status = ProviderStatus.Offline };
+            readErrors[provider.Id] = snapshots.ContainsKey(provider.Id) ? null : "Usage unavailable";
+            Debug.WriteLine(ex);
+        }
+    }
+
+    private void UpdateTrayTooltip()
+    {
+        var parts = new List<string>(providers.Length);
+        foreach (var provider in providers)
+        {
+            if (!snapshots.TryGetValue(provider.Id, out var snap))
+            {
+                parts.Add($"{ShortCode(provider.Id)} offline");
+                continue;
+            }
+
+            if (snap.Status == ProviderStatus.Standby)
+            {
+                parts.Add($"{ShortCode(provider.Id)} standby");
+                continue;
+            }
+
+            if (snap.Status == ProviderStatus.Offline || snap.Lanes.Count == 0)
+            {
+                parts.Add($"{ShortCode(provider.Id)} offline");
+                continue;
+            }
+
+            var summary = string.Join(" ", snap.Lanes
+                .Where(l => l.RemainingPercent.HasValue)
+                .Take(2)
+                .Select(l => $"{ShortLaneLabel(l.Key)} {l.RemainingPercent!.Value:0}%"));
+            parts.Add(string.IsNullOrEmpty(summary)
+                ? $"{ShortCode(provider.Id)} ready"
+                : $"{ShortCode(provider.Id)} {summary}");
+        }
+
+        var tooltip = string.Join(" · ", parts);
+        if (string.IsNullOrWhiteSpace(tooltip)) tooltip = "CodexBar";
+        trayIcon.Text = tooltip[..Math.Min(63, tooltip.Length)];
+    }
+
+    private static string ShortCode(string providerId) => providerId.ToLowerInvariant() switch
+    {
+        CodexUsageProvider.ProviderId => "CDX",
+        AntigravityUsageProvider.ProviderId => "AGY",
+        _ => providerId.ToUpperInvariant()
+    };
+
+    private static string ShortLaneLabel(string key) => key.ToLowerInvariant() switch
+    {
+        "five-hour" => "5h",
+        "weekly" => "wk",
+        "gemini-weekly" => "wk",
+        "gemini-pro" => "pro",
+        "gemini-flash" => "fl",
+        "claude" => "cld",
+        _ => key.Length <= 4 ? key : key[..4]
+    };
+
     private ContextMenuStrip BuildTrayMenu()
     {
         var menu = new ContextMenuStrip { ShowImageMargin = false };
         menu.Items.Add("Show widget", null, (_, _) => ShowWidget());
         menu.Items.Add("Refresh now", null, async (_, _) => await RefreshUsageAsync());
+
+        var providerMenu = new ToolStripMenuItem("Active tab");
+        providerMenuItems.Clear();
+        foreach (var provider in providers)
+        {
+            var item = new ToolStripMenuItem(provider.DisplayName)
+            {
+                Checked = string.Equals(provider.Id, activeProviderId, StringComparison.OrdinalIgnoreCase)
+            };
+            var capturedId = provider.Id;
+            item.Click += (_, _) => SwitchProvider(capturedId);
+            providerMenuItems[provider.Id] = item;
+            providerMenu.DropDownItems.Add(item);
+        }
+        menu.Items.Add(providerMenu);
+        menu.Items.Add("Setup Antigravity CLI bridge…", null, async (_, _) => await SetupAntigravityBridgeAsync());
 
         var refreshInterval = new ToolStripMenuItem("Refresh interval");
         foreach (var option in new[]
@@ -346,6 +601,76 @@ internal sealed class WidgetForm : Form
         return menu;
     }
 
+    private async Task SetupAntigravityBridgeAsync()
+    {
+        var executablePath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(executablePath))
+        {
+            MessageBox.Show(this, "Could not resolve CodexBar executable path.", "Antigravity Bridge",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        var settingsPath = AntigravityStatusBridge.GetCliSettingsPath();
+        var command = AntigravityStatusBridge.BuildBridgeCommand(executablePath);
+        var confirm = MessageBox.Show(
+            this,
+            "CodexBar can register itself as an Antigravity CLI (agy) statusLine bridge without replacing the default statusline.\n\n" +
+            $"Target config: {settingsPath}\n" +
+            $"Command: {command}\n\n" +
+            "Existing custom statusLine scripts will not be overwritten. Continue?",
+            "Setup Antigravity CLI Bridge",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question);
+
+        if (confirm != DialogResult.Yes) return;
+
+        try
+        {
+            var result = AntigravityStatusBridge.ConfigureCliSettings(executablePath, out var existingCommand);
+            switch (result)
+            {
+                case BridgeSetupResult.Configured:
+                    MessageBox.Show(
+                        this,
+                        "Antigravity CLI statusLine bridge configured.\n" +
+                        "Run or interact with `agy` to populate live Antigravity quota data.",
+                        "Antigravity Bridge",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                    await RefreshUsageAsync();
+                    break;
+
+                case BridgeSetupResult.AlreadyConfigured:
+                    MessageBox.Show(
+                        this,
+                        "Antigravity CLI statusLine bridge is already configured for this executable.",
+                        "Antigravity Bridge",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                    break;
+
+                case BridgeSetupResult.CustomCommandConflict:
+                    var copyResult = MessageBox.Show(
+                        this,
+                        "An existing custom statusLine command is already configured in settings.json:\n" +
+                        $"{existingCommand}\n\n" +
+                        "CodexBar left your config untouched. Copy the bridge command to your clipboard so you can pipe stdin to it from your script?",
+                        "Custom statusLine Detected",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning);
+                    if (copyResult == DialogResult.Yes)
+                        Clipboard.SetText(command);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Could not configure Antigravity CLI settings:\n{ex.Message}",
+                "Antigravity Bridge", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
     private void ShowNotificationSettings()
     {
         using var dialog = new Form
@@ -364,7 +689,7 @@ internal sealed class WidgetForm : Form
             Location = new Point(12, 12),
             AutoSize = false,
             Size = new Size(510, 50),
-            Text = "When weekly capacity resets to 100% available, CodexBar can send one notification email to your configured address.\n" +
+            Text = "When tracked quota capacity resets to 100% available, CodexBar can send one notification email to your configured address.\n" +
                    "If SMTP fields are blank, CodexBar opens your default mail app with a prefilled draft instead.",
             TextAlign = ContentAlignment.TopLeft
         };
@@ -372,7 +697,7 @@ internal sealed class WidgetForm : Form
 
         var enabled = new CheckBox
         {
-            Text = "Notify when weekly capacity resets to 100% available",
+            Text = "Notify when tracked capacity resets to 100% available",
             Location = new Point(12, 50),
             AutoSize = true,
             Checked = settings.NotifyOnUsageLimitReached
@@ -521,11 +846,11 @@ internal sealed class WidgetForm : Form
         return value.Trim();
     }
 
-    private static string BuildNotificationBody(UsageSnapshot snapshot, bool isTest = false)
+    private static string BuildNotificationBody(string providerName, QuotaLane lane, bool isTest = false)
     {
-        var resetText = snapshot.Weekly.ResetsAt.ToLocalTime().ToString("ddd, MMM d h:mm tt");
+        var resetText = lane.ResetsAt?.ToLocalTime().ToString("ddd, MMM d h:mm tt") ?? "unknown";
         var prefix = isTest ? "TEST: " : string.Empty;
-        return $"{prefix}Codex has reached 0% usage (100% available) at {DateTimeOffset.Now:ddd, MMM d h:mm tt}. " +
+        return $"{prefix}{providerName} ({lane.Label}) has reached 0% usage (100% available) at {DateTimeOffset.Now:ddd, MMM d h:mm tt}. " +
             $"Current window resets at {resetText}.";
     }
 
@@ -538,18 +863,24 @@ internal sealed class WidgetForm : Form
 
     private void DrawResetSchedule(
         Graphics g,
-        UsageWindow window,
+        DateTimeOffset? resetsAt,
         IReadOnlyList<DateTimeOffset> resetExpirations,
         float x,
         float y)
     {
-        var reset = window.ResetsAt.ToLocalTime();
+        if (!resetsAt.HasValue)
+        {
+            g.DrawString("No active reset timer", resetFont, dimBrush, new RectangleF(x, y, Width - x - 12, 32));
+            return;
+        }
+
+        var reset = resetsAt.Value.ToLocalTime();
         if (resetExpirations.Count == 0)
         {
             var resetText = reset.Date == DateTimeOffset.Now.Date
                 ? $"Resets today · {reset:h:mm tt}"
                 : $"Resets {reset:ddd, MMM d} · {reset:h:mm tt}";
-            g.DrawString(resetText, resetFont, textBrush, x, y);
+            g.DrawString(resetText, resetFont, textBrush, new RectangleF(x, y, Width - x - 12, 34));
             return;
         }
 
@@ -592,55 +923,88 @@ internal sealed class WidgetForm : Form
     private static Color Lerp(Color a, Color b, double t) => Color.FromArgb(
         (int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
 
-    private async Task NotifyIfUsageLimitReachedAsync(UsageSnapshot current)
+    private async Task NotifyIfUsageLimitReachedAsync(ProviderSnapshot current, bool accountChanged)
     {
-        var previousUsedPercent = settings.LastObservedWeeklyUsedPercent;
-        var lastNotificationReset = settings.LastUsageLimitNotificationResetAt;
-        var alreadyNotifiedForWindow = lastNotificationReset.HasValue &&
-            (current.Weekly.ResetsAt - lastNotificationReset.Value).Duration() <= ResetTimeMatchTolerance;
-        var becameFullyAvailable = previousUsedPercent.HasValue &&
-            previousUsedPercent.Value > FullAvailabilityUsedPercent &&
-            current.Weekly.UsedPercent <= FullAvailabilityUsedPercent;
-        var observationChanged = settings.LastObservedWeeklyUsedPercent != current.Weekly.UsedPercent;
+        if (current.AlertLaneKeys is not { Count: > 0 }) return;
 
-        // Persist changed observations first. If the app restarts, or notification
-        // delivery fails, this transition cannot be handled a second time.
-        settings.LastObservedWeeklyUsedPercent = current.Weekly.UsedPercent;
+        var settingsDirty = false;
+        var notificationsToSend = new List<QuotaLane>();
 
-        if (!settings.NotifyOnUsageLimitReached || !becameFullyAvailable || alreadyNotifiedForWindow)
+        foreach (var laneKey in current.AlertLaneKeys)
         {
-            if (observationChanged)
-                settings.Save();
-            return;
+            var lane = current.Lanes.FirstOrDefault(l => string.Equals(l.Key, laneKey, StringComparison.OrdinalIgnoreCase));
+            if (lane?.UsedPercent is not { } usedPercent || lane.ResetsAt is not { } resetsAt)
+                continue;
+
+            var state = settings.GetOrCreateNotificationState(current.ProviderId, lane.Key);
+
+            if (accountChanged)
+            {
+                state.LastObservedUsedPercent = usedPercent;
+                state.LastNotifiedResetAt = null;
+                SyncLegacyCodexState(current.ProviderId, lane.Key, state);
+                settingsDirty = true;
+                continue;
+            }
+
+            var previousUsedPercent = state.LastObservedUsedPercent;
+            var lastNotificationReset = state.LastNotifiedResetAt;
+            var alreadyNotifiedForWindow = lastNotificationReset.HasValue &&
+                (resetsAt - lastNotificationReset.Value).Duration() <= ResetTimeMatchTolerance;
+            var becameFullyAvailable = previousUsedPercent.HasValue &&
+                previousUsedPercent.Value > FullAvailabilityUsedPercent &&
+                usedPercent <= FullAvailabilityUsedPercent;
+
+            if (state.LastObservedUsedPercent != usedPercent)
+            {
+                state.LastObservedUsedPercent = usedPercent;
+                SyncLegacyCodexState(current.ProviderId, lane.Key, state);
+                settingsDirty = true;
+            }
+
+            if (settings.NotifyOnUsageLimitReached && becameFullyAvailable && !alreadyNotifiedForWindow)
+            {
+                state.LastNotifiedResetAt = resetsAt;
+                SyncLegacyCodexState(current.ProviderId, lane.Key, state);
+                settingsDirty = true;
+                notificationsToSend.Add(lane);
+            }
         }
 
-        // The reset can happen at any time, so do not infer it from the expected
-        // weekly schedule. The usage transition above is the event; the reset time
-        // is retained only as a narrow guard against duplicate readings.
-        settings.LastUsageLimitNotificationResetAt = current.Weekly.ResetsAt;
-        settings.Save();
+        if (settingsDirty)
+            settings.Save();
 
-        var sent = await SendUsageLimitEmailAsync(current);
-        trayIcon.ShowBalloonTip(
-            sent ? 2500 : 4500,
-            "CodexBar",
-            sent
-                ? "Weekly capacity reset to 100% available. The email notification was triggered."
-                : "Weekly capacity reset to 100% available, but the email notification could not be sent.",
-            sent ? ToolTipIcon.Info : ToolTipIcon.Warning);
+        foreach (var lane in notificationsToSend)
+        {
+            var sent = await SendUsageLimitEmailAsync(current.DisplayName, lane);
+            trayIcon.ShowBalloonTip(
+                sent ? 2500 : 4500,
+                "CodexBar",
+                sent
+                    ? $"{current.DisplayName} capacity reset to 100% available. The email notification was triggered."
+                    : $"{current.DisplayName} capacity reset to 100% available, but the email notification could not be sent.",
+                sent ? ToolTipIcon.Info : ToolTipIcon.Warning);
+        }
+    }
+
+    private void SyncLegacyCodexState(string providerId, string laneKey, ProviderNotificationState state)
+    {
+        if (string.Equals(providerId, CodexUsageProvider.ProviderId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(laneKey, "weekly", StringComparison.OrdinalIgnoreCase))
+        {
+            settings.LastObservedWeeklyUsedPercent = state.LastObservedUsedPercent;
+            settings.LastUsageLimitNotificationResetAt = state.LastNotifiedResetAt;
+        }
     }
 
     private Task<bool> SendTestUsageAlertAsync()
     {
-        var test = new UsageSnapshot(
-            new UsageWindow(0, DateTimeOffset.UtcNow.AddHours(5)),
-            new UsageWindow(0, DateTimeOffset.UtcNow.AddDays(7)),
-            DateTimeOffset.UtcNow,
-            Array.Empty<DateTimeOffset>());
-        return SendUsageLimitEmailAsync(test, isTest: true, forceSend: true);
+        var active = ActiveProvider;
+        var testLane = new QuotaLane("weekly", "WEEKLY LEFT", 0, DateTimeOffset.UtcNow.AddDays(7));
+        return SendUsageLimitEmailAsync(active.DisplayName, testLane, isTest: true, forceSend: true);
     }
 
-    private async Task<bool> SendUsageLimitEmailAsync(UsageSnapshot current, bool isTest = false, bool forceSend = false)
+    private async Task<bool> SendUsageLimitEmailAsync(string providerName, QuotaLane lane, bool isTest = false, bool forceSend = false)
     {
         var toAddress = settings.UsageLimitNotificationEmail;
         var smtpHost = settings.SmtpHost;
@@ -651,12 +1015,12 @@ internal sealed class WidgetForm : Form
             return false;
 
         if (string.IsNullOrWhiteSpace(smtpHost))
-            return TryLaunchMailClient(current, toAddress!, isTest);
+            return TryLaunchMailClient(providerName, lane, toAddress!, isTest);
 
-        return await SendViaSmtpAsync(current, toAddress!, smtpHost, isTest);
+        return await SendViaSmtpAsync(providerName, lane, toAddress!, smtpHost, isTest);
     }
 
-    private static bool TryLaunchMailClient(UsageSnapshot current, string toAddress, bool isTest)
+    private static bool TryLaunchMailClient(string providerName, QuotaLane lane, string toAddress, bool isTest)
     {
         try
         {
@@ -664,9 +1028,9 @@ internal sealed class WidgetForm : Form
                 return false;
 
             var subject = Uri.EscapeDataString(isTest
-                ? "TEST: Codex weekly capacity reset alert"
-                : "Codex weekly capacity is 100% available");
-            var body = Uri.EscapeDataString(BuildNotificationBody(current, isTest));
+                ? $"TEST: {providerName} capacity reset alert"
+                : $"{providerName} capacity is 100% available");
+            var body = Uri.EscapeDataString(BuildNotificationBody(providerName, lane, isTest));
             var uri = $"mailto:{Uri.EscapeDataString(recipient.Address)}?subject={subject}&body={body}";
 
             Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true });
@@ -679,15 +1043,15 @@ internal sealed class WidgetForm : Form
         }
     }
 
-    private async Task<bool> SendViaSmtpAsync(UsageSnapshot current, string toAddress, string smtpHost, bool isTest)
+    private async Task<bool> SendViaSmtpAsync(string providerName, QuotaLane lane, string toAddress, string smtpHost, bool isTest)
     {
         try
         {
             var fromAddress = string.IsNullOrWhiteSpace(settings.SmtpFromAddress) ? toAddress : settings.SmtpFromAddress!;
             var subject = isTest
-                ? "TEST: Codex weekly capacity reset alert"
-                : "Codex weekly capacity is 100% available";
-            var body = BuildNotificationBody(current, isTest);
+                ? $"TEST: {providerName} capacity reset alert"
+                : $"{providerName} capacity is 100% available";
+            var body = BuildNotificationBody(providerName, lane, isTest);
 
             using var message = new MailMessage(fromAddress, toAddress)
             {
@@ -800,7 +1164,8 @@ internal sealed class WidgetForm : Form
     {
         if (disposing)
         {
-            liveClient.Dispose();
+            foreach (var provider in providers)
+                provider.Dispose();
             refreshTimer.Dispose();
             positionSaveTimer.Dispose();
             trayIcon.Dispose();
@@ -814,10 +1179,12 @@ internal sealed class WidgetForm : Form
             denseResetFont.Dispose();
             dimBrush.Dispose();
             statusOkBrush.Dispose();
+            statusStandbyBrush.Dispose();
             statusOfflineBrush.Dispose();
             textBrush.Dispose();
             trackBrush.Dispose();
             usageBrush.Dispose();
+            activeTabAccentBrush.Dispose();
             refreshGate.Dispose();
         }
         base.Dispose(disposing);

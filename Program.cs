@@ -9,8 +9,11 @@ internal static class Program
     private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
 
     [STAThread]
-    private static void Main()
+    private static int Main(string[] args)
     {
+        if (args is [AntigravityStatusBridge.BridgeArgument])
+            return AntigravityStatusBridge.RunFromStandardInput();
+
         _ = SetCurrentProcessExplicitAppUserModelID("CodexBar.Desktop");
         ApplicationConfiguration.Initialize();
         using var mutex = new Mutex(true, "Local\\CodexBar.SingleInstance", out var firstInstance);
@@ -18,10 +21,11 @@ internal static class Program
         {
             MessageBox.Show("CodexBar is already running in the notification area.", "CodexBar",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
+            return 0;
         }
 
         Application.Run(new WidgetForm());
         GC.KeepAlive(mutex);
+        return 0;
     }
 }

@@ -6,11 +6,18 @@ using Microsoft.Win32;
 
 namespace CodexBar;
 
+internal sealed class ProviderNotificationState
+{
+    public double? LastObservedUsedPercent { get; set; }
+    public DateTimeOffset? LastNotifiedResetAt { get; set; }
+}
+
 internal sealed class AppSettings
 {
     public double Opacity { get; set; } = 0.9;
     public bool AlwaysOnTop { get; set; } = true;
     public int RefreshSeconds { get; set; } = 15;
+    public string ActiveProvider { get; set; } = CodexUsageProvider.ProviderId;
     public bool NotifyOnUsageLimitReached { get; set; } = true;
     public string? UsageLimitNotificationEmail { get; set; }
     public string? SmtpHost { get; set; }
@@ -23,6 +30,8 @@ internal sealed class AppSettings
     public string? SmtpFromAddress { get; set; }
     public DateTimeOffset? LastUsageLimitNotificationResetAt { get; set; }
     public double? LastObservedWeeklyUsedPercent { get; set; }
+    public Dictionary<string, ProviderNotificationState> NotificationStates { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
     public int? X { get; set; }
     public int? Y { get; set; }
     [JsonIgnore]
@@ -32,12 +41,45 @@ internal sealed class AppSettings
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "CodexBar", "settings.json");
 
-    public static AppSettings Load()
+    public static string BuildNotificationKey(string providerId, string laneKey) =>
+        $"{providerId}:{laneKey}";
+
+    public ProviderNotificationState GetOrCreateNotificationState(string providerId, string laneKey)
+    {
+        var key = BuildNotificationKey(providerId, laneKey);
+        if (!NotificationStates.TryGetValue(key, out var state))
+        {
+            state = new ProviderNotificationState();
+            NotificationStates[key] = state;
+        }
+        return state;
+    }
+
+    public static AppSettings Load() => LoadFrom(SettingsPath);
+
+    internal static AppSettings LoadFrom(string path)
     {
         try
         {
-            var json = File.ReadAllText(SettingsPath);
+            var json = File.ReadAllText(path);
             var settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+            settings.NotificationStates = settings.NotificationStates is null
+                ? new Dictionary<string, ProviderNotificationState>(StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, ProviderNotificationState>(settings.NotificationStates, StringComparer.OrdinalIgnoreCase);
+
+            var legacyKey = BuildNotificationKey(CodexUsageProvider.ProviderId, "weekly");
+            if (!settings.NotificationStates.ContainsKey(legacyKey) &&
+                (settings.LastObservedWeeklyUsedPercent.HasValue || settings.LastUsageLimitNotificationResetAt.HasValue))
+            {
+                settings.NotificationStates[legacyKey] = new ProviderNotificationState
+                {
+                    LastObservedUsedPercent = settings.LastObservedWeeklyUsedPercent,
+                    LastNotifiedResetAt = settings.LastUsageLimitNotificationResetAt
+                };
+            }
+
+            if (string.IsNullOrWhiteSpace(settings.ActiveProvider))
+                settings.ActiveProvider = CodexUsageProvider.ProviderId;
 
             if (!string.IsNullOrEmpty(settings.ProtectedSmtpPassword))
             {
