@@ -4,6 +4,19 @@ All notable changes to CodexBar are documented here.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-26
+
+### Added
+
+- Adds **Antigravity** quota monitoring alongside Codex with a single-window top tab bar (`CODEX · ANTIGRAVITY`) and dynamic height adaptation for multiple model pools.
+- Shows each Antigravity model pool's remaining percentage and local reset schedule, and switches to a `Standby` state when neither `Antigravity` nor `agy` is running.
+- Adds a built-in `--antigravity-statusline` bridge mode and tray menu **Setup Antigravity CLI bridge…** action that safely registers `statusLine` in `~/.gemini/antigravity-cli/settings.json` without overwriting existing custom scripts.
+- Adds `IUsageProvider` and shared `QuotaLane` / `ProviderSnapshot` abstractions, with per-provider notification state tracking and automatic migration from v1.2.x settings.
+
+### Verification
+
+- Covers Antigravity `statusLine` payload parsing, `reset_in_seconds` fallback, empty quota handling, standby detection, account switching, bridge config safety, and legacy settings migration in the regression suite (14/14 checks passing).
+
 ## [1.2.1] - 2026-09-08
 
 ### Documentation
@@ -59,7 +72,8 @@ All notable changes to CodexBar are documented here.
 - Live weekly Codex capacity and reset-time display.
 - Configurable refresh interval, transparency, always-on-top mode, Windows startup, and notification-area support.
 
-[Unreleased]: https://github.com/fangrui258/codex-bar/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/fangrui258/codex-bar/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/fangrui258/codex-bar/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/fangrui258/codex-bar/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/fangrui258/codex-bar/releases/tag/v1.2.0
 [1.1.1]: https://github.com/jspann21/codex-bar/compare/v1.1.0...v1.1.1

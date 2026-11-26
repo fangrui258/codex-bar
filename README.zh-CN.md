@@ -2,18 +2,21 @@
 
 [English](README.md) | **简体中文**
 
-**一个小巧的 Windows 桌面组件，用于随时查看 Codex 的 5 小时额度和周额度。**
+**一个小巧的 Windows 桌面组件，用于随时查看 Codex 与 Antigravity 的剩余额度。**
 
-CodexBar 无需单独登录、API Key 或账户配置，会自动复用你已经登录的 Codex 会话。它能够显示 5 小时和每周两个额度窗口的剩余百分比及下次重置时间，并列出所有可用的额度重置次数及其过期时间。小组件尺寸紧凑、支持拖动，并可在隐藏到 Windows 通知区域后继续更新。
+CodexBar 无需单独登录、API Key 或账户配置，会自动复用你已登录的 Codex 会话，并支持通过顶部标签栏（`CODEX · ANTIGRAVITY`）在同一个紧凑悬浮窗内切换查看 Antigravity 的各模型池余量。在 Codex 标签页中显示 5 小时与每周额度窗口的剩余百分比、下次重置时间以及可用重置次数过期时间；在 Antigravity 标签页中于客户端或 `agy` CLI 运行时展示各模型组的剩余百分比与重置时间，未运行时自动进入待机状态。小组件支持拖动，并可在最小化到 Windows 通知区域后继续更新。
 
 ![CodexBar 显示 5 小时和每周剩余额度](assets/codexbar.png)
 
 ## 功能亮点
 
 - 无需额外登录或 API Key，自动复用现有 Codex 身份验证
-- 显示 **5 小时和每周剩余额度**，而不是已用额度
-- 以本地日期和时间显示两个窗口的下次重置时间
-- 显示所有可用额度重置次数的准确过期日期和时间
+- 支持单窗顶部 **`CODEX · ANTIGRAVITY` 标签切换**，Antigravity 视图会根据模型池数量自适应高度
+- 显示 **Codex 5 小时和每周剩余额度**，以及 **Antigravity 各模型池剩余额度**
+- 以本地日期和时间显示各个窗口的下次重置时间
+- 显示所有可用 Codex 额度重置次数的准确过期日期和时间
+- 未检测到 `Antigravity` 或 `agy` 运行时自动切换为**待机（Standby）**
+- 托盘菜单内置 **Setup Antigravity CLI bridge…**，安全接入 `agy` 官方 `statusLine` 桥接而不覆盖已有自定义脚本
 - 剩余额度降低时，颜色会从绿色变为黄色和红色
 - 按可配置的时间间隔自动刷新
 - 可最小化到 Windows 通知区域
@@ -75,6 +78,12 @@ CodexBar 使用计算机上已经完成身份验证的 Codex 安装：
 5. 显示 `100 − used_percent`、每个窗口的重置时间，以及所有可用额度重置次数在本地时区的过期时间。
 
 因此，CodexBar 不会抓取界面、自动操作浏览器、直接读取身份验证令牌，也不会维护第二套登录。默认刷新间隔为 15 秒，可在托盘菜单的 **Refresh interval** 中修改。每次刷新都会执行一次真实的、已通过身份验证的额度请求：例如选择 5 秒会每 5 秒请求一次，选择 5 分钟则每 5 分钟请求一次。如果请求失败，小组件会把最后一次成功获取的数据明确标记为 **Offline**，同时继续重试。
+
+### Antigravity CLI（`agy`）监控
+
+1. 点击顶部标签栏的 **ANTIGRAVITY**（或在托盘菜单 **Active tab** 中切换）。
+2. 右键小组件或托盘图标，选择 **Setup Antigravity CLI bridge…**，即可将 `CodexBar.exe --antigravity-statusline` 注册到 `~/.gemini/antigravity-cli/settings.json`（默认开启 `stack_with_default: true`，且不会覆盖已有的自定义 `statusLine` 脚本）。
+3. 当 `agy` 或 Antigravity 运行时，CodexBar 会显示各个模型池的剩余百分比与本地重置时间并自动调整窗口高度；未检测到运行时自动显示为 **Standby** 待机状态。
 
 ## 隐私与安全
 

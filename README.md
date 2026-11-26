@@ -2,18 +2,21 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-**A tiny Windows desktop widget for keeping an eye on your 5-hour and weekly Codex limits.**
+**A tiny Windows desktop widget for keeping an eye on your Codex and Antigravity usage limits.**
 
-CodexBar itself requires no login, API key, or account setup—it automatically reuses your existing signed-in Codex session. It shows the percentage remaining and next reset for both the 5-hour and weekly Codex windows, plus the expiration dates and times of every available banked reset. It stays out of the way as a compact, draggable widget and continues updating from the Windows notification area.
+CodexBar itself requires no login, API key, or account setup—it automatically reuses your existing signed-in Codex session and can also monitor Antigravity model quotas via a clickable top tab (`CODEX · ANTIGRAVITY`). For Codex, it shows the percentage remaining and next reset for both the 5-hour and weekly windows, plus the expiration dates and times of every available banked reset. For Antigravity, it shows remaining percentages and reset times for each reported model pool while active, and enters standby when Antigravity is not running. It stays out of the way as a compact, draggable widget and continues updating from the Windows notification area.
 
 ![CodexBar showing 5-hour and weekly capacity remaining](assets/codexbar.png)
 
 ## Highlights
 
 - Requires no separate login or API key—automatically reuses your existing Codex authentication
-- Shows **5-hour and weekly capacity remaining**, not usage consumed
-- Displays both next-reset times in your local date and time
-- Lists the exact expiration date and time of every available banked rate-limit reset
+- Supports **top tab switching** between **Codex** and **Antigravity** in a single lightweight window
+- Shows **5-hour and weekly Codex capacity remaining**, plus **Antigravity per-model pool remaining quotas**
+- Displays next-reset times in your local date and time
+- Lists the exact expiration date and time of every available Codex banked rate-limit reset
+- Automatically puts Antigravity in **Standby** when neither Antigravity nor `agy` is running
+- Includes a one-click **Setup Antigravity CLI bridge…** tray option for `agy` `statusLine` integration without overwriting custom scripts
 - Changes from green to amber to red as capacity runs low
 - Refreshes automatically at a configurable interval
 - Minimizes to the Windows notification area
@@ -75,6 +78,12 @@ CodexBar uses the authenticated Codex installation already on your computer:
 5. Displays `100 − used_percent` and the reset time for each window, plus any available banked-reset expirations in your local time zone.
 
 This means CodexBar does not scrape the UI, automate a browser, read authentication tokens directly, or maintain a second login. The default refresh interval is 15 seconds, but you can change it from **Refresh interval** in the tray menu. Each selected interval performs a real authenticated rate-limit read—for example, selecting 5 seconds sends one read every 5 seconds, while selecting 5 minutes sends one every 5 minutes. If a request fails, the widget clearly labels the last successful live value as **Offline** while it retries.
+
+### Antigravity CLI (`agy`) monitoring
+
+1. Click **ANTIGRAVITY** in the top tab bar (or choose **Active tab → Antigravity** from the tray menu).
+2. Right-click the widget or tray icon and choose **Setup Antigravity CLI bridge…** to register `CodexBar.exe --antigravity-statusline` in `~/.gemini/antigravity-cli/settings.json` (with `stack_with_default: true`, leaving existing custom `statusLine` scripts untouched).
+3. While `agy` or Antigravity is running, CodexBar displays each model pool's remaining percentage and reset time and adapts the window height automatically. When neither process is running, the Antigravity tab enters **Standby**.
 
 ## Privacy and security
 
