@@ -20,7 +20,10 @@ var tests = new (string Name, Func<Task> Run)[]
     ("migrates legacy Codex notification state into multi-provider settings", Sync(MigratesLegacyNotificationSettings)),
     ("ignores epoch placeholder reset_time and zero reset_in_seconds", Sync(IgnoresEpochPlaceholderResetTimes)),
     ("distinguishes desktop standby and stale expired snapshots", DistinguishesDesktopStandbyAndStaleExpiredSnapshots),
-    ("reports Antigravity CLI bridge readiness from settings.json", Sync(DetectsBridgeConfigurationReadiness))
+    ("reports Antigravity CLI bridge readiness from settings.json", Sync(DetectsBridgeConfigurationReadiness)),
+    ("parses agy -p /usage JSON groups and buckets", Sync(ParsesAgyPrintUsageJson)),
+    ("rejects non-SUCCESS agy -p /usage status", Sync(RejectsNonSuccessAgyPrintJson)),
+    ("polls agy CLI automatically when desktop app is running and caches interval", PollsCliAutomaticallyWhenDesktopRunningAndRespectsCache)
 };
 
 var failures = 0;
@@ -42,6 +45,8 @@ if (args is ["--snapshot", var snapshotPath])
     SaveVisualSnapshot(snapshotPath);
 else if (args is ["--live"])
     await VerifyLiveUsageAsync();
+else if (args is ["--live-antigravity"])
+    await VerifyLiveAntigravityUsageAsync();
 
 return failures == 0 ? 0 : 1;
 
@@ -463,7 +468,7 @@ static async Task DistinguishesDesktopStandbyAndStaleExpiredSnapshots()
 
         using var desktopOnlyProvider = new AntigravityUsageProvider(
             statusPath,
-            isAgyRunning: () => false,
+            isExternalAgyRunning: () => false,
             isDesktopRunning: () => true,
             utcNowProvider: () => DateTimeOffset.Parse("2026-11-27T02:28:00Z", CultureInfo.InvariantCulture));
         var desktopOnlySnapshot = await desktopOnlyProvider.ReadUsageAsync();
@@ -474,7 +479,7 @@ static async Task DistinguishesDesktopStandbyAndStaleExpiredSnapshots()
 
         using var staleAgyProvider = new AntigravityUsageProvider(
             statusPath,
-            isAgyRunning: () => true,
+            isExternalAgyRunning: () => true,
             isDesktopRunning: () => true,
             utcNowProvider: () => DateTimeOffset.Parse("2026-11-27T02:28:00Z", CultureInfo.InvariantCulture));
         var staleSnapshot = await staleAgyProvider.ReadUsageAsync();
@@ -509,6 +514,110 @@ static void DetectsBridgeConfigurationReadiness()
     }
 }
 
+static void ParsesAgyPrintUsageJson()
+{
+    using var doc = JsonDocument.Parse("""
+        {
+          "conversation_id": "",
+          "status": "SUCCESS",
+          "duration_seconds": 0,
+          "num_turns": 0,
+          "usage": { "total_tokens": 0 },
+          "command": {
+            "name": "usage",
+            "data": {
+              "groups": [
+                {
+                  "name": "Gemini Models",
+                  "buckets": [
+                    { "id": "gemini-weekly", "window": "weekly", "remaining_fraction": 0.8664, "reset_time": "2026-12-03T07:04:13Z" },
+                    { "id": "gemini-5h", "window": "5h", "remaining_fraction": 0.9899, "reset_time": "2026-11-27T13:57:18Z" }
+                  ]
+                },
+                {
+                  "name": "Claude and GPT models",
+                  "buckets": [
+                    { "id": "3p-weekly", "window": "weekly", "remaining_fraction": 1, "reset_time": "1970-01-01T00:00:00Z" },
+                    { "id": "3p-5h", "window": "5h", "remaining_fraction": 1, "reset_time": "1970-01-01T00:00:00Z" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+        """);
+
+    var snapshot = AntigravityUsageParser.Parse(doc.RootElement, DateTimeOffset.Parse("2026-11-27T09:00:00Z", CultureInfo.InvariantCulture));
+    Equal(ProviderStatus.Online, snapshot.Status, "online status");
+    Equal(4, snapshot.Lanes.Count, "four quota lanes");
+    Equal("GEMINI WEEKLY LEFT", snapshot.Lanes[0].Label, "gemini weekly label");
+    CloseTo(86.64d, snapshot.Lanes[0].RemainingPercent!.Value, "gemini weekly remaining");
+    Equal("GEMINI 5H LEFT", snapshot.Lanes[1].Label, "gemini 5h label");
+    CloseTo(98.99d, snapshot.Lanes[1].RemainingPercent!.Value, "gemini 5h remaining");
+    Equal("CLAUDE/GPT WEEKLY LEFT", snapshot.Lanes[2].Label, "3p weekly label");
+    Equal<DateTimeOffset?>(null, snapshot.Lanes[2].ResetsAt, "3p weekly epoch ignored");
+    Equal("CLAUDE/GPT 5H LEFT", snapshot.Lanes[3].Label, "3p 5h label");
+    Equal<DateTimeOffset?>(null, snapshot.Lanes[3].ResetsAt, "3p 5h epoch ignored");
+}
+
+static void RejectsNonSuccessAgyPrintJson()
+{
+    using var doc = JsonDocument.Parse("""{"status":"ERROR","response":"Not signed in"}""");
+    try
+    {
+        AntigravityUsageParser.Parse(doc.RootElement, DateTimeOffset.UtcNow);
+    }
+    catch (InvalidOperationException ex) when (ex.Message.Contains("ERROR", StringComparison.Ordinal))
+    {
+        return;
+    }
+
+    throw new InvalidOperationException("Expected an error for non-SUCCESS status.");
+}
+
+static async Task PollsCliAutomaticallyWhenDesktopRunningAndRespectsCache()
+{
+    var now = DateTimeOffset.Parse("2026-11-27T09:00:00Z", CultureInfo.InvariantCulture);
+    var desktopRunning = true;
+    var fetchCount = 0;
+
+    using var provider = new AntigravityUsageProvider(
+        statusFilePath: Path.Combine(Path.GetTempPath(), $"unused-{Guid.NewGuid():N}.json"),
+        isExternalAgyRunning: () => false,
+        isDesktopRunning: () => desktopRunning,
+        utcNowProvider: () => now,
+        cliUsageFetcher: _ =>
+        {
+            fetchCount++;
+            return Task.FromResult(new ProviderSnapshot(
+                AntigravityUsageProvider.ProviderId,
+                "ANTIGRAVITY",
+                "Antigravity",
+                ProviderStatus.Online,
+                new[] { new QuotaLane("gemini-weekly", "GEMINI WEEKLY LEFT", 10 + fetchCount, now.AddDays(5)) },
+                now));
+        },
+        cliPollInterval: TimeSpan.FromSeconds(30));
+
+    var first = await provider.ReadUsageAsync(forceRefresh: false);
+    Equal(ProviderStatus.Online, first.Status, "online when desktop app open");
+    Equal(1, fetchCount, "initial CLI poll");
+
+    now = now.AddSeconds(10);
+    var cached = await provider.ReadUsageAsync(forceRefresh: false);
+    Equal(1, fetchCount, "cached within poll interval");
+    CloseTo(first.Lanes[0].RemainingPercent!.Value, cached.Lanes[0].RemainingPercent!.Value, "cached percentage");
+
+    var forced = await provider.ReadUsageAsync(forceRefresh: true);
+    Equal(2, fetchCount, "forced refresh bypasses cache");
+    CloseTo(88d, forced.Lanes[0].RemainingPercent!.Value, "updated forced percentage");
+
+    desktopRunning = false;
+    var standby = await provider.ReadUsageAsync(forceRefresh: false);
+    Equal(ProviderStatus.Standby, standby.Status, "standby when desktop closes");
+    Equal(2, fetchCount, "no CLI poll in standby");
+}
+
 static void SaveVisualSnapshot(string path)
 {
     CultureInfo.DefaultThreadCurrentCulture = CultureInfo.GetCultureInfo("en-US");
@@ -529,7 +638,7 @@ static void SaveVisualSnapshot(string path)
         ProviderStatus.Online,
         new[]
         {
-            new QuotaLane("3p-5h", "3P 5H LEFT", 0, null),
+            new QuotaLane("3p-5h", "CLAUDE/GPT 5H LEFT", 0, null),
             new QuotaLane("gemini-5h", "GEMINI 5H LEFT", 3, now.AddHours(3.25)),
             new QuotaLane("gemini-weekly", "GEMINI WEEKLY LEFT", 10, now.AddDays(6.2))
         },
@@ -578,6 +687,15 @@ static async Task VerifyLiveUsageAsync()
     var fiveHour = Required(usage.FiveHour, "live five-hour window");
     Console.WriteLine($"LIVE 5-hour left: {100 - fiveHour.UsedPercent:0}%");
     Console.WriteLine($"LIVE weekly left: {100 - usage.Weekly.UsedPercent:0}%");
+}
+
+static async Task VerifyLiveAntigravityUsageAsync()
+{
+    using var provider = new AntigravityUsageProvider();
+    var snapshot = await provider.ReadUsageAsync(forceRefresh: true);
+    Console.WriteLine($"LIVE ANTIGRAVITY status: {snapshot.Status} ({snapshot.StatusMessage ?? "ok"})");
+    foreach (var lane in snapshot.Lanes)
+        Console.WriteLine($"LIVE ANTIGRAVITY {lane.Label}: {lane.RemainingPercent:0}% (resets: {lane.ResetsAt?.ToLocalTime().ToString("g") ?? "Full capacity"})");
 }
 
 static void CloseTo(double expected, double actual, string label)

@@ -79,11 +79,11 @@ CodexBar 使用计算机上已经完成身份验证的 Codex 安装：
 
 因此，CodexBar 不会抓取界面、自动操作浏览器、直接读取身份验证令牌，也不会维护第二套登录。默认刷新间隔为 15 秒，可在托盘菜单的 **Refresh interval** 中修改。每次刷新都会执行一次真实的、已通过身份验证的额度请求：例如选择 5 秒会每 5 秒请求一次，选择 5 分钟则每 5 分钟请求一次。如果请求失败，小组件会把最后一次成功获取的数据明确标记为 **Offline**，同时继续重试。
 
-### Antigravity CLI（`agy`）监控
+### Antigravity 监控
 
-1. 点击顶部标签栏的 **ANTIGRAVITY**（或在托盘菜单 **Active tab** 中切换）。
-2. 右键小组件或托盘图标，选择 **Setup Antigravity CLI bridge…**，即可将 `CodexBar.exe --antigravity-statusline` 注册到 `~/.gemini/antigravity-cli/settings.json`（默认开启 `stack_with_default: true`，且不会覆盖已有的自定义 `statusLine` 脚本）。
-3. 当 `agy` 或 Antigravity 运行时，CodexBar 会显示各个模型池的剩余百分比与本地重置时间并自动调整窗口高度；未检测到运行时自动显示为 **Standby** 待机状态。
+1. 安装官方 [Antigravity CLI（`agy`）](https://antigravity.google/docs/getting-started) 并运行一次 `agy` 完成登录。
+2. 点击顶部标签栏的 **ANTIGRAVITY**（或在托盘菜单 **Active tab** 中切换）。
+3. 只要 **Antigravity** 桌面端软件或 `agy` CLI 正在运行，CodexBar 就会在后台静默调用官方 `agy -p "/usage" --output-format json`（不创建对话、消耗 `0` token）自动同步各模型池剩余百分比与重置时间（默认每 30 秒缓存刷新，点击 **Refresh now** 立即刷新）；未检测到运行时自动显示为 **Standby** 待机状态。（托盘菜单仍保留可选的 `statusLine` 桥接配置作为兜底。）
 
 ## 隐私与安全
 

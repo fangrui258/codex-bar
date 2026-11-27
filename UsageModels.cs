@@ -37,5 +37,5 @@ internal interface IUsageProvider : IDisposable
     string TabLabel { get; }
     string DisplayName { get; }
     bool CheckAccountChanged();
-    Task<ProviderSnapshot> ReadUsageAsync(CancellationToken cancellationToken = default);
+    Task<ProviderSnapshot> ReadUsageAsync(bool forceRefresh = false, CancellationToken cancellationToken = default);
 }

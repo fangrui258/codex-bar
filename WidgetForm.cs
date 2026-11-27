@@ -53,6 +53,7 @@ internal sealed class WidgetForm : Form
     private readonly SolidBrush activeTabAccentBrush = new(Color.FromArgb(46, 220, 112));
 
     private string activeProviderId;
+    private bool agyCliInstalled;
     private bool antigravityBridgeConfigured;
     private bool exiting;
 
@@ -79,6 +80,7 @@ internal sealed class WidgetForm : Form
     internal WidgetForm(IUsageProvider[] customProviders)
     {
         providers = customProviders;
+        agyCliInstalled = AntigravityUsageProvider.FindAgyExecutables().Count > 0;
         antigravityBridgeConfigured = AntigravityStatusBridge.IsBridgeConfigured();
         activeProviderId = providers.Any(p => string.Equals(p.Id, settings.ActiveProvider, StringComparison.OrdinalIgnoreCase))
             ? providers.First(p => string.Equals(p.Id, settings.ActiveProvider, StringComparison.OrdinalIgnoreCase)).Id
@@ -130,7 +132,7 @@ internal sealed class WidgetForm : Form
             SavePositionNow();
         };
 
-        Shown += async (_, _) => await RefreshUsageAsync();
+        Shown += async (_, _) => await RefreshUsageAsync(forceRefresh: true);
         LocationChanged += (_, _) => QueuePositionSave();
         FormClosing += OnFormClosing;
         MouseDoubleClick += (_, _) => HideToTray();
@@ -312,13 +314,15 @@ internal sealed class WidgetForm : Form
         }
         else
         {
-            var hint = activeSnapshot?.Status == ProviderStatus.Standby
-                ? (antigravityBridgeConfigured
-                    ? "Bridge configured. Run agy CLI to sync live limits."
-                    : "Right-click tray icon → Setup Antigravity CLI bridge…")
-                : (antigravityBridgeConfigured
-                    ? "Bridge configured. Interact in agy CLI to push quota."
-                    : "Right-click tray icon → Setup Antigravity CLI bridge…");
+            var hint = activeSnapshot is null
+                ? "Checking Antigravity / agy CLI status…"
+                : activeSnapshot.Status == ProviderStatus.Standby
+                    ? (agyCliInstalled || antigravityBridgeConfigured
+                        ? "Open Antigravity or agy CLI to sync live limits."
+                        : "Install agy CLI to sync desktop limits automatically.")
+                    : (agyCliInstalled
+                        ? "Ensure agy is signed in (run agy once), or click Refresh now."
+                        : "Install agy CLI or setup statusLine bridge from tray menu.");
             g.DrawString(hint, compactResetFont, dimBrush, new RectangleF(14, 106, Width - 28, 34));
         }
 
@@ -396,19 +400,16 @@ internal sealed class WidgetForm : Form
         base.OnMouseDown(e);
     }
 
-    private async Task RefreshUsageAsync()
+    private async Task RefreshUsageAsync(bool forceRefresh = false)
     {
         if (!await refreshGate.WaitAsync(0)) return;
         refreshTimer.Stop();
         try
         {
+            agyCliInstalled = AntigravityUsageProvider.FindAgyExecutables().Count > 0;
             antigravityBridgeConfigured = AntigravityStatusBridge.IsBridgeConfigured();
-            var tasks = providers.Select(RefreshProviderAsync).ToArray();
+            var tasks = providers.Select(p => RefreshProviderAsync(p, forceRefresh)).ToArray();
             await Task.WhenAll(tasks);
-
-            UpdateTrayTooltip();
-            UpdateWindowHeightForActiveProvider();
-            Invalidate();
         }
         finally
         {
@@ -417,7 +418,7 @@ internal sealed class WidgetForm : Form
         }
     }
 
-    private async Task RefreshProviderAsync(IUsageProvider provider)
+    private async Task RefreshProviderAsync(IUsageProvider provider, bool forceRefresh)
     {
         try
         {
@@ -433,7 +434,7 @@ internal sealed class WidgetForm : Form
                 }
             }
 
-            var current = await provider.ReadUsageAsync();
+            var current = await provider.ReadUsageAsync(forceRefresh);
             snapshots[provider.Id] = current;
             readErrors[provider.Id] = null;
 
@@ -446,6 +447,12 @@ internal sealed class WidgetForm : Form
                 snapshots[provider.Id] = previous with { Status = ProviderStatus.Offline };
             readErrors[provider.Id] = snapshots.ContainsKey(provider.Id) ? null : "Usage unavailable";
             Debug.WriteLine(ex);
+        }
+        finally
+        {
+            UpdateTrayTooltip();
+            UpdateWindowHeightForActiveProvider();
+            Invalidate();
         }
     }
 
@@ -497,7 +504,10 @@ internal sealed class WidgetForm : Form
     {
         "five-hour" => "5h",
         "weekly" => "wk",
+        "gemini-5h" => "5h",
         "gemini-weekly" => "wk",
+        "3p-5h" => "3p5h",
+        "3p-weekly" => "3pwk",
         "gemini-pro" => "pro",
         "gemini-flash" => "fl",
         "claude" => "cld",
@@ -508,7 +518,7 @@ internal sealed class WidgetForm : Form
     {
         var menu = new ContextMenuStrip { ShowImageMargin = false };
         menu.Items.Add("Show widget", null, (_, _) => ShowWidget());
-        menu.Items.Add("Refresh now", null, async (_, _) => await RefreshUsageAsync());
+        menu.Items.Add("Refresh now", null, async (_, _) => await RefreshUsageAsync(forceRefresh: true));
 
         var providerMenu = new ToolStripMenuItem("Active tab");
         providerMenuItems.Clear();
@@ -645,7 +655,7 @@ internal sealed class WidgetForm : Form
                         "Antigravity Bridge",
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Information);
-                    await RefreshUsageAsync();
+                    await RefreshUsageAsync(forceRefresh: true);
                     break;
 
                 case BridgeSetupResult.AlreadyConfigured:

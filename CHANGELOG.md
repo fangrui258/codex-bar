@@ -4,6 +4,14 @@ All notable changes to CodexBar are documented here.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-27
+
+### Added
+
+- Automatically queries live Antigravity quotas headlessly via `agy -p "/usage" --output-format json` (`num_turns: 0`, `total_tokens: 0`) whenever the desktop `Antigravity` app or `agy` CLI is running—no open terminal session or `statusLine` hook required.
+- Parses the `command.data.groups[].buckets[]` quota response (displaying `GEMINI WEEKLY LEFT`, `GEMINI 5H LEFT`, `CLAUDE/GPT WEEKLY LEFT`, `CLAUDE/GPT 5H LEFT`) with a 30-second background poll cache and immediate refresh via **Refresh now**.
+- Updates providers progressively as each completes so Codex renders immediately without waiting for Antigravity's CLI refresh.
+
 ## [1.3.2] - 2026-11-27
 
 ### Fixed
@@ -88,7 +96,8 @@ All notable changes to CodexBar are documented here.
 - Live weekly Codex capacity and reset-time display.
 - Configurable refresh interval, transparency, always-on-top mode, Windows startup, and notification-area support.
 
-[Unreleased]: https://github.com/fangrui258/codex-bar/compare/v1.3.2...HEAD
+[Unreleased]: https://github.com/fangrui258/codex-bar/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/fangrui258/codex-bar/compare/v1.3.2...v1.4.0
 [1.3.2]: https://github.com/fangrui258/codex-bar/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/fangrui258/codex-bar/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/fangrui258/codex-bar/compare/v1.2.1...v1.3.0

@@ -12,6 +12,12 @@ internal static class AntigravityUsageParser
         if (root.ValueKind != JsonValueKind.Object)
             throw new InvalidOperationException("Antigravity status payload must be a JSON object.");
 
+        if (GetOptionalString(root, "status") is { } statusText &&
+            !string.Equals(statusText, "SUCCESS", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Antigravity returned status '{statusText}'.");
+        }
+
         var email = GetOptionalString(root, "email");
         var planTier = GetOptionalString(root, "plan_tier") ?? GetOptionalString(root, "planTier");
         var accountKey = !string.IsNullOrWhiteSpace(email)
@@ -19,7 +25,29 @@ internal static class AntigravityUsageParser
             : !string.IsNullOrWhiteSpace(planTier) ? $"tier:{planTier}" : null;
 
         var lanes = new List<QuotaLane>();
-        if (TryGetProperty(root, "quota", out var quota) && quota.ValueKind == JsonValueKind.Object)
+
+        if (TryGetCliUsageGroups(root, out var groups))
+        {
+            foreach (var group in groups.EnumerateArray())
+            {
+                if (group.ValueKind != JsonValueKind.Object) continue;
+                if (!TryGetProperty(group, "buckets", out var buckets) || buckets.ValueKind != JsonValueKind.Array)
+                    continue;
+
+                foreach (var bucket in buckets.EnumerateArray())
+                {
+                    if (bucket.ValueKind != JsonValueKind.Object) continue;
+                    var key = GetOptionalString(bucket, "id")
+                        ?? GetOptionalString(bucket, "key")
+                        ?? GetOptionalString(bucket, "window");
+                    if (string.IsNullOrWhiteSpace(key)) continue;
+
+                    if (TryParseBucket(key, bucket, observedAt, out var lane))
+                        lanes.Add(lane);
+                }
+            }
+        }
+        else if (TryGetProperty(root, "quota", out var quota) && quota.ValueKind == JsonValueKind.Object)
         {
             foreach (var entry in quota.EnumerateObject())
             {
@@ -74,6 +102,17 @@ internal static class AntigravityUsageParser
             observedAt,
             AccountKey: accountKey,
             AlertLaneKeys: alertKeys);
+    }
+
+    private static bool TryGetCliUsageGroups(JsonElement root, out JsonElement groups)
+    {
+        groups = default;
+        return TryGetProperty(root, "command", out var command) &&
+            command.ValueKind == JsonValueKind.Object &&
+            TryGetProperty(command, "data", out var data) &&
+            data.ValueKind == JsonValueKind.Object &&
+            TryGetProperty(data, "groups", out groups) &&
+            groups.ValueKind == JsonValueKind.Array;
     }
 
     private static bool TryParseBucket(
@@ -154,6 +193,11 @@ internal static class AntigravityUsageParser
 
     internal static string FormatLabel(string key)
     {
+        if (string.Equals(key, "3p-5h", StringComparison.OrdinalIgnoreCase))
+            return "CLAUDE/GPT 5H LEFT";
+        if (string.Equals(key, "3p-weekly", StringComparison.OrdinalIgnoreCase))
+            return "CLAUDE/GPT WEEKLY LEFT";
+
         var words = key
             .Replace('-', ' ')
             .Replace('_', ' ')

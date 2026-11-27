@@ -13,7 +13,7 @@ internal sealed class CodexUsageProvider : IUsageProvider
 
     public bool CheckAccountChanged() => client.RestartIfAuthenticationChanged();
 
-    public async Task<ProviderSnapshot> ReadUsageAsync(CancellationToken cancellationToken = default)
+    public async Task<ProviderSnapshot> ReadUsageAsync(bool forceRefresh = false, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var usage = await client.ReadUsageAsync();

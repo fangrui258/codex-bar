@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 
 namespace CodexBar;
@@ -8,29 +9,47 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
     public const string ProviderId = "antigravity";
     private const string StatusFileEnvVar = "CODEXBAR_ANTIGRAVITY_STATUS_FILE";
     private static readonly TimeSpan StaleSnapshotGracePeriod = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan DefaultCliPollInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan CliCommandTimeout = TimeSpan.FromSeconds(20);
 
     private readonly string statusFilePath;
-    private readonly Func<bool> isAgyRunning;
+    private readonly Func<bool> isExternalAgyRunning;
     private readonly Func<bool> isDesktopRunning;
     private readonly Func<DateTimeOffset> utcNowProvider;
+    private readonly Func<CancellationToken, Task<ProviderSnapshot>>? cliUsageFetcher;
+    private readonly TimeSpan cliPollInterval;
+
     private string? lastObservedAccountKey;
     private bool hasObservedAccount;
+    private ProviderSnapshot? cachedCliSnapshot;
+    private DateTimeOffset? lastCliFetchAt;
+    private int activeCliPollProcessId;
+    private bool disposed;
 
     public AntigravityUsageProvider()
-        : this(ResolveStatusFilePath(), IsAgyCliRunning, IsAntigravityDesktopRunning, () => DateTimeOffset.UtcNow)
     {
+        statusFilePath = ResolveStatusFilePath();
+        isExternalAgyRunning = () => IsExternalAgyCliRunning(Volatile.Read(ref activeCliPollProcessId));
+        isDesktopRunning = IsAntigravityDesktopRunning;
+        utcNowProvider = () => DateTimeOffset.UtcNow;
+        cliPollInterval = DefaultCliPollInterval;
+        cliUsageFetcher = FetchUsageViaCliAsync;
     }
 
     internal AntigravityUsageProvider(
         string statusFilePath,
-        Func<bool> isAgyRunning,
+        Func<bool> isExternalAgyRunning,
         Func<bool>? isDesktopRunning = null,
-        Func<DateTimeOffset>? utcNowProvider = null)
+        Func<DateTimeOffset>? utcNowProvider = null,
+        Func<CancellationToken, Task<ProviderSnapshot>>? cliUsageFetcher = null,
+        TimeSpan? cliPollInterval = null)
     {
         this.statusFilePath = statusFilePath;
-        this.isAgyRunning = isAgyRunning;
+        this.isExternalAgyRunning = isExternalAgyRunning;
         this.isDesktopRunning = isDesktopRunning ?? (() => false);
         this.utcNowProvider = utcNowProvider ?? (() => DateTimeOffset.UtcNow);
+        this.cliUsageFetcher = cliUsageFetcher;
+        this.cliPollInterval = cliPollInterval ?? DefaultCliPollInterval;
     }
 
     public string Id => ProviderId;
@@ -66,37 +85,245 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
         return true;
     }
 
-    public Task<ProviderSnapshot> ReadUsageAsync(CancellationToken cancellationToken = default)
+    public async Task<ProviderSnapshot> ReadUsageAsync(
+        bool forceRefresh = false,
+        CancellationToken cancellationToken = default)
     {
+        ObjectDisposedException.ThrowIf(disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
         var now = utcNowProvider();
 
-        if (!isAgyRunning())
+        var agyRunning = isExternalAgyRunning();
+        var desktopRunning = isDesktopRunning();
+        if (!agyRunning && !desktopRunning)
         {
-            var standbyMessage = isDesktopRunning()
-                ? "Desktop open · run agy CLI to sync"
-                : "Antigravity standby (not running)";
-
-            return Task.FromResult(new ProviderSnapshot(
+            cachedCliSnapshot = null;
+            lastCliFetchAt = null;
+            return new ProviderSnapshot(
                 ProviderId,
                 TabLabel,
                 DisplayName,
                 ProviderStatus.Standby,
                 Array.Empty<QuotaLane>(),
                 now,
-                StatusMessage: standbyMessage));
+                StatusMessage: "Antigravity standby (not running)");
         }
 
-        if (!File.Exists(statusFilePath))
+        if (cliUsageFetcher is not null)
         {
-            return Task.FromResult(new ProviderSnapshot(
+            if (!forceRefresh &&
+                cachedCliSnapshot is not null &&
+                lastCliFetchAt.HasValue &&
+                now - lastCliFetchAt.Value < cliPollInterval &&
+                !HasExpiredReset(cachedCliSnapshot, now))
+            {
+                return cachedCliSnapshot;
+            }
+
+            try
+            {
+                var cliSnapshot = await cliUsageFetcher(cancellationToken);
+                cachedCliSnapshot = cliSnapshot;
+                lastCliFetchAt = utcNowProvider();
+                return cliSnapshot;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Antigravity CLI usage check failed: {ex.Message}");
+                if (agyRunning && TryReadStatusFile(now, out var fallbackSnapshot) &&
+                    fallbackSnapshot.Status == ProviderStatus.Online)
+                {
+                    return fallbackSnapshot;
+                }
+
+                return new ProviderSnapshot(
+                    ProviderId,
+                    TabLabel,
+                    DisplayName,
+                    ProviderStatus.Offline,
+                    Array.Empty<QuotaLane>(),
+                    now,
+                    StatusMessage: ex.Message);
+            }
+        }
+
+        if (!agyRunning)
+        {
+            return new ProviderSnapshot(
+                ProviderId,
+                TabLabel,
+                DisplayName,
+                ProviderStatus.Standby,
+                Array.Empty<QuotaLane>(),
+                now,
+                StatusMessage: "Desktop open · run agy CLI to sync");
+        }
+
+        return TryReadStatusFile(now, out var fileSnapshot)
+            ? fileSnapshot
+            : new ProviderSnapshot(
                 ProviderId,
                 TabLabel,
                 DisplayName,
                 ProviderStatus.Offline,
                 Array.Empty<QuotaLane>(),
                 now,
-                StatusMessage: "Waiting for agy statusLine update…"));
+                StatusMessage: "Waiting for agy statusLine update…");
+    }
+
+    private async Task<ProviderSnapshot> FetchUsageViaCliAsync(CancellationToken cancellationToken)
+    {
+        var executables = FindAgyExecutables();
+        if (executables.Count == 0)
+            throw new InvalidOperationException("Install agy CLI to read desktop quota");
+
+        Exception? firstFailure = null;
+        foreach (var executable in executables)
+        {
+            try
+            {
+                return await RunCliUsageCommandAsync(executable, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                firstFailure ??= ex;
+            }
+        }
+
+        throw firstFailure ?? new InvalidOperationException("agy CLI did not return usage data.");
+    }
+
+    private async Task<ProviderSnapshot> RunCliUsageCommandAsync(string executable, CancellationToken cancellationToken)
+    {
+        var workingDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CodexBar");
+        Directory.CreateDirectory(workingDir);
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executable,
+            WorkingDirectory = workingDir,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden
+        };
+        startInfo.ArgumentList.Add("-p");
+        startInfo.ArgumentList.Add("/usage");
+        startInfo.ArgumentList.Add("--output-format");
+        startInfo.ArgumentList.Add("json");
+        startInfo.ArgumentList.Add("--print-timeout");
+        startInfo.ArgumentList.Add("15s");
+
+        using var process = new Process { StartInfo = startInfo };
+        if (!process.Start())
+            throw new InvalidOperationException("Could not start agy CLI.");
+
+        Interlocked.Exchange(ref activeCliPollProcessId, process.Id);
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(CliCommandTimeout);
+
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+            var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+
+            await process.WaitForExitAsync(timeoutCts.Token);
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
+
+            if (process.ExitCode != 0)
+            {
+                var detail = string.IsNullOrWhiteSpace(stderr) ? $"exit code {process.ExitCode}" : stderr.Trim();
+                if (detail.Contains("not logged", StringComparison.OrdinalIgnoreCase) ||
+                    detail.Contains("login", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Run agy once to sign in");
+                throw new InvalidOperationException("agy CLI quota request failed");
+            }
+
+            if (string.IsNullOrWhiteSpace(stdout))
+                throw new InvalidOperationException("agy CLI returned no output");
+
+            using var doc = JsonDocument.Parse(stdout);
+            return AntigravityUsageParser.Parse(doc.RootElement, utcNowProvider());
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            TryKillProcessTree(process);
+            throw new InvalidOperationException("agy CLI quota request timed out");
+        }
+        catch
+        {
+            TryKillProcessTree(process);
+            throw;
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref activeCliPollProcessId, 0, process.Id);
+        }
+    }
+
+    private static void TryKillProcessTree(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+        }
+    }
+
+    internal static List<string> FindAgyExecutables()
+    {
+        var candidates = new List<string>();
+        var defaultBinary = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "agy",
+            "bin",
+            "agy.exe");
+        if (File.Exists(defaultBinary))
+            candidates.Add(defaultBinary);
+
+        var pathValue = Environment.GetEnvironmentVariable("PATH");
+        if (!string.IsNullOrWhiteSpace(pathValue))
+        {
+            foreach (var directory in pathValue.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            {
+                try
+                {
+                    var path = Path.Combine(directory.Trim('"'), "agy.exe");
+                    if (File.Exists(path))
+                        candidates.Add(path);
+                }
+                catch (ArgumentException) { }
+            }
+        }
+
+        return candidates.Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .ToList();
+    }
+
+    private bool TryReadStatusFile(DateTimeOffset now, out ProviderSnapshot snapshot)
+    {
+        if (!File.Exists(statusFilePath))
+        {
+            snapshot = null!;
+            return false;
         }
 
         try
@@ -108,7 +335,7 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
                 FileShare.ReadWrite | FileShare.Delete);
             using var document = JsonDocument.Parse(stream);
             var observedAt = new DateTimeOffset(File.GetLastWriteTimeUtc(statusFilePath), TimeSpan.Zero);
-            var snapshot = AntigravityUsageParser.Parse(document.RootElement, observedAt);
+            snapshot = AntigravityUsageParser.Parse(document.RootElement, observedAt);
 
             if (snapshot.AccountKey is not null)
             {
@@ -118,7 +345,7 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
 
             if (HasExpiredReset(snapshot, now) && now - observedAt > StaleSnapshotGracePeriod)
             {
-                return Task.FromResult(new ProviderSnapshot(
+                snapshot = new ProviderSnapshot(
                     ProviderId,
                     TabLabel,
                     DisplayName,
@@ -126,21 +353,22 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
                     Array.Empty<QuotaLane>(),
                     now,
                     StatusMessage: "Refreshing stale agy snapshot…",
-                    AccountKey: snapshot.AccountKey));
+                    AccountKey: snapshot.AccountKey);
             }
 
-            return Task.FromResult(snapshot);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
         {
-            return Task.FromResult(new ProviderSnapshot(
+            snapshot = new ProviderSnapshot(
                 ProviderId,
                 TabLabel,
                 DisplayName,
                 ProviderStatus.Offline,
                 Array.Empty<QuotaLane>(),
                 now,
-                StatusMessage: "Status bridge file invalid or unreadable"));
+                StatusMessage: "Status bridge file invalid or unreadable");
+            return true;
         }
     }
 
@@ -150,7 +378,7 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
     private bool TryReadAccountKey(out string? accountKey)
     {
         accountKey = null;
-        if (!isAgyRunning() || !File.Exists(statusFilePath)) return false;
+        if (!isExternalAgyRunning() || !File.Exists(statusFilePath)) return false;
 
         try
         {
@@ -174,11 +402,13 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
         }
     }
 
-    public static bool IsAgyCliRunning() => IsProcessRunning("agy");
+    public static bool IsExternalAgyCliRunning(int excludedProcessId = 0) =>
+        IsProcessRunning("agy", excludedProcessId);
 
-    public static bool IsAntigravityDesktopRunning() => IsProcessRunning("antigravity");
+    public static bool IsAntigravityDesktopRunning() =>
+        IsProcessRunning("antigravity", excludedProcessId: 0);
 
-    private static bool IsProcessRunning(string expectedProcessName)
+    private static bool IsProcessRunning(string expectedProcessName, int excludedProcessId)
     {
         var processes = Process.GetProcesses();
         try
@@ -187,6 +417,9 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
             {
                 try
                 {
+                    if (excludedProcessId > 0 && process.Id == excludedProcessId)
+                        continue;
+
                     if (string.Equals(process.ProcessName, expectedProcessName, StringComparison.OrdinalIgnoreCase))
                         return true;
                 }
@@ -206,5 +439,6 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
 
     public void Dispose()
     {
+        disposed = true;
     }
 }

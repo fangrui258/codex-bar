@@ -79,11 +79,11 @@ CodexBar uses the authenticated Codex installation already on your computer:
 
 This means CodexBar does not scrape the UI, automate a browser, read authentication tokens directly, or maintain a second login. The default refresh interval is 15 seconds, but you can change it from **Refresh interval** in the tray menu. Each selected interval performs a real authenticated rate-limit read—for example, selecting 5 seconds sends one read every 5 seconds, while selecting 5 minutes sends one every 5 minutes. If a request fails, the widget clearly labels the last successful live value as **Offline** while it retries.
 
-### Antigravity CLI (`agy`) monitoring
+### Antigravity monitoring
 
-1. Click **ANTIGRAVITY** in the top tab bar (or choose **Active tab → Antigravity** from the tray menu).
-2. Right-click the widget or tray icon and choose **Setup Antigravity CLI bridge…** to register `CodexBar.exe --antigravity-statusline` in `~/.gemini/antigravity-cli/settings.json` (with `stack_with_default: true`, leaving existing custom `statusLine` scripts untouched).
-3. While `agy` or Antigravity is running, CodexBar displays each model pool's remaining percentage and reset time and adapts the window height automatically. When neither process is running, the Antigravity tab enters **Standby**.
+1. Install the official [Antigravity CLI (`agy`)](https://antigravity.google/docs/getting-started) and sign in once by running `agy`.
+2. Click **ANTIGRAVITY** in the top tab bar (or choose **Active tab → Antigravity** from the tray menu).
+3. Whenever the **Antigravity** desktop app or `agy` CLI is running, CodexBar automatically queries `agy -p "/usage" --output-format json` silently in the background (`0` tokens, `0` conversation turns) every 30 seconds (or immediately on **Refresh now**) and displays each model pool's remaining percentage and reset time. When neither process is running, the Antigravity tab enters **Standby**. (An optional `statusLine` bridge setup remains available in the tray menu as a fallback.)
 
 ## Privacy and security
 
