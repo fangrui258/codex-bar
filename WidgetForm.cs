@@ -53,6 +53,7 @@ internal sealed class WidgetForm : Form
     private readonly SolidBrush activeTabAccentBrush = new(Color.FromArgb(46, 220, 112));
 
     private string activeProviderId;
+    private bool antigravityBridgeConfigured;
     private bool exiting;
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
@@ -78,6 +79,7 @@ internal sealed class WidgetForm : Form
     internal WidgetForm(IUsageProvider[] customProviders)
     {
         providers = customProviders;
+        antigravityBridgeConfigured = AntigravityStatusBridge.IsBridgeConfigured();
         activeProviderId = providers.Any(p => string.Equals(p.Id, settings.ActiveProvider, StringComparison.OrdinalIgnoreCase))
             ? providers.First(p => string.Equals(p.Id, settings.ActiveProvider, StringComparison.OrdinalIgnoreCase)).Id
             : providers[0].Id;
@@ -292,7 +294,7 @@ internal sealed class WidgetForm : Form
     {
         var isCodex = string.Equals(activeProvider.Id, CodexUsageProvider.ProviderId, StringComparison.OrdinalIgnoreCase);
         var primaryLabel = isCodex ? "5-HOUR LEFT" : "STATUS";
-        var secondaryLabel = isCodex ? "WEEKLY LEFT" : "SETUP HINT";
+        var secondaryLabel = isCodex ? "WEEKLY LEFT" : "DETAILS";
 
         g.DrawString(primaryLabel, titleFont, dimBrush, 14, 31);
         g.DrawString(secondaryLabel, titleFont, dimBrush, 14, 88);
@@ -302,7 +304,7 @@ internal sealed class WidgetForm : Form
             ?? activeError
             ?? $"Waiting for {activeProvider.DisplayName} usage…";
         g.DrawString("—%", percentFont, textBrush, 14, 43);
-        g.DrawString(primaryMessage, resetFont, dimBrush, new RectangleF(104, 48, Width - 116, 34));
+        g.DrawString(primaryMessage, resetFont, dimBrush, new RectangleF(104, 46, Width - 116, 36));
 
         if (isCodex)
         {
@@ -311,8 +313,12 @@ internal sealed class WidgetForm : Form
         else
         {
             var hint = activeSnapshot?.Status == ProviderStatus.Standby
-                ? "Start Antigravity or agy CLI to read live limits."
-                : "Right-click tray icon → Setup Antigravity CLI bridge…";
+                ? (antigravityBridgeConfigured
+                    ? "Bridge configured. Run agy CLI to sync live limits."
+                    : "Right-click tray icon → Setup Antigravity CLI bridge…")
+                : (antigravityBridgeConfigured
+                    ? "Bridge configured. Interact in agy CLI to push quota."
+                    : "Right-click tray icon → Setup Antigravity CLI bridge…");
             g.DrawString(hint, compactResetFont, dimBrush, new RectangleF(14, 106, Width - 28, 34));
         }
 
@@ -331,15 +337,15 @@ internal sealed class WidgetForm : Form
 
         var expirations = lane.ExpirationTimes ?? Array.Empty<DateTimeOffset>();
         var infoY = rowIndex == 0
-            ? 52
-            : 86 + (rowIndex - 1) * ExtraRowStride + (expirations.Count > 0 ? 18 : 23);
+            ? (expirations.Count > 0 ? 48 : 48)
+            : 86 + (rowIndex - 1) * ExtraRowStride + 18;
 
         if (lane.RemainingPercent is { } remaining)
         {
             var color = RemainingColor(remaining);
             usageBrush.Color = color;
             g.DrawString($"{remaining:0}%", percentFont, usageBrush, 14, percentY);
-            DrawResetSchedule(g, lane.ResetsAt, expirations, 104, infoY);
+            DrawResetSchedule(g, lane.ResetsAt, remaining, expirations, 104, infoY);
             DrawProgress(g, remaining, color, progressY);
         }
         else
@@ -396,6 +402,7 @@ internal sealed class WidgetForm : Form
         refreshTimer.Stop();
         try
         {
+            antigravityBridgeConfigured = AntigravityStatusBridge.IsBridgeConfigured();
             var tasks = providers.Select(RefreshProviderAsync).ToArray();
             await Task.WhenAll(tasks);
 
@@ -864,13 +871,15 @@ internal sealed class WidgetForm : Form
     private void DrawResetSchedule(
         Graphics g,
         DateTimeOffset? resetsAt,
+        double? remainingPercent,
         IReadOnlyList<DateTimeOffset> resetExpirations,
         float x,
         float y)
     {
         if (!resetsAt.HasValue)
         {
-            g.DrawString("No active reset timer", resetFont, dimBrush, new RectangleF(x, y, Width - x - 12, 32));
+            var label = remainingPercent is >= 99.999 ? "Full capacity" : "No active reset timer";
+            g.DrawString(label, resetFont, dimBrush, new RectangleF(x, y, Width - x - 12, 32));
             return;
         }
 
@@ -880,7 +889,7 @@ internal sealed class WidgetForm : Form
             var resetText = reset.Date == DateTimeOffset.Now.Date
                 ? $"Resets today · {reset:h:mm tt}"
                 : $"Resets {reset:ddd, MMM d} · {reset:h:mm tt}";
-            g.DrawString(resetText, resetFont, textBrush, new RectangleF(x, y, Width - x - 12, 34));
+            g.DrawString(resetText, resetFont, textBrush, new RectangleF(x, y, Width - x - 12, 38));
             return;
         }
 

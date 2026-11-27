@@ -7,21 +7,30 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
 {
     public const string ProviderId = "antigravity";
     private const string StatusFileEnvVar = "CODEXBAR_ANTIGRAVITY_STATUS_FILE";
+    private static readonly TimeSpan StaleSnapshotGracePeriod = TimeSpan.FromMinutes(2);
 
     private readonly string statusFilePath;
-    private readonly Func<bool> isClientRunning;
+    private readonly Func<bool> isAgyRunning;
+    private readonly Func<bool> isDesktopRunning;
+    private readonly Func<DateTimeOffset> utcNowProvider;
     private string? lastObservedAccountKey;
     private bool hasObservedAccount;
 
     public AntigravityUsageProvider()
-        : this(ResolveStatusFilePath(), IsAntigravityProcessRunning)
+        : this(ResolveStatusFilePath(), IsAgyCliRunning, IsAntigravityDesktopRunning, () => DateTimeOffset.UtcNow)
     {
     }
 
-    internal AntigravityUsageProvider(string statusFilePath, Func<bool> isClientRunning)
+    internal AntigravityUsageProvider(
+        string statusFilePath,
+        Func<bool> isAgyRunning,
+        Func<bool>? isDesktopRunning = null,
+        Func<DateTimeOffset>? utcNowProvider = null)
     {
         this.statusFilePath = statusFilePath;
-        this.isClientRunning = isClientRunning;
+        this.isAgyRunning = isAgyRunning;
+        this.isDesktopRunning = isDesktopRunning ?? (() => false);
+        this.utcNowProvider = utcNowProvider ?? (() => DateTimeOffset.UtcNow);
     }
 
     public string Id => ProviderId;
@@ -60,10 +69,14 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
     public Task<ProviderSnapshot> ReadUsageAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var now = DateTimeOffset.UtcNow;
+        var now = utcNowProvider();
 
-        if (!isClientRunning())
+        if (!isAgyRunning())
         {
+            var standbyMessage = isDesktopRunning()
+                ? "Desktop open · run agy CLI to sync"
+                : "Antigravity standby (not running)";
+
             return Task.FromResult(new ProviderSnapshot(
                 ProviderId,
                 TabLabel,
@@ -71,7 +84,7 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
                 ProviderStatus.Standby,
                 Array.Empty<QuotaLane>(),
                 now,
-                StatusMessage: "Antigravity standby (not running)"));
+                StatusMessage: standbyMessage));
         }
 
         if (!File.Exists(statusFilePath))
@@ -83,7 +96,7 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
                 ProviderStatus.Offline,
                 Array.Empty<QuotaLane>(),
                 now,
-                StatusMessage: "Waiting for agy statusLine bridge…"));
+                StatusMessage: "Waiting for agy statusLine update…"));
         }
 
         try
@@ -103,6 +116,19 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
                 hasObservedAccount = true;
             }
 
+            if (HasExpiredReset(snapshot, now) && now - observedAt > StaleSnapshotGracePeriod)
+            {
+                return Task.FromResult(new ProviderSnapshot(
+                    ProviderId,
+                    TabLabel,
+                    DisplayName,
+                    ProviderStatus.Standby,
+                    Array.Empty<QuotaLane>(),
+                    now,
+                    StatusMessage: "Refreshing stale agy snapshot…",
+                    AccountKey: snapshot.AccountKey));
+            }
+
             return Task.FromResult(snapshot);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
@@ -118,10 +144,13 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
         }
     }
 
+    internal static bool HasExpiredReset(ProviderSnapshot snapshot, DateTimeOffset now) =>
+        snapshot.Lanes.Any(lane => lane.ResetsAt is { } resetsAt && resetsAt <= now);
+
     private bool TryReadAccountKey(out string? accountKey)
     {
         accountKey = null;
-        if (!isClientRunning() || !File.Exists(statusFilePath)) return false;
+        if (!isAgyRunning() || !File.Exists(statusFilePath)) return false;
 
         try
         {
@@ -133,7 +162,7 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
             using var document = JsonDocument.Parse(stream);
             if (document.RootElement.ValueKind != JsonValueKind.Object) return false;
 
-            var snapshot = AntigravityUsageParser.Parse(document.RootElement, DateTimeOffset.UtcNow);
+            var snapshot = AntigravityUsageParser.Parse(document.RootElement, utcNowProvider());
             if (string.IsNullOrWhiteSpace(snapshot.AccountKey)) return false;
 
             accountKey = snapshot.AccountKey;
@@ -145,7 +174,11 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
         }
     }
 
-    public static bool IsAntigravityProcessRunning()
+    public static bool IsAgyCliRunning() => IsProcessRunning("agy");
+
+    public static bool IsAntigravityDesktopRunning() => IsProcessRunning("antigravity");
+
+    private static bool IsProcessRunning(string expectedProcessName)
     {
         var processes = Process.GetProcesses();
         try
@@ -154,12 +187,8 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
             {
                 try
                 {
-                    var name = process.ProcessName;
-                    if (string.Equals(name, "agy", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(name, "antigravity", StringComparison.OrdinalIgnoreCase))
-                    {
+                    if (string.Equals(process.ProcessName, expectedProcessName, StringComparison.OrdinalIgnoreCase))
                         return true;
-                    }
                 }
                 catch
                 {

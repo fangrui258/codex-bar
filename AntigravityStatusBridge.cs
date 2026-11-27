@@ -64,6 +64,29 @@ internal static class AntigravityStatusBridge
     public static string BuildDirectCommand(string executablePath) =>
         $"\"{executablePath}\" {BridgeArgument}";
 
+    public static bool IsBridgeConfigured() => IsBridgeConfiguredAt(GetCliSettingsPath());
+
+    internal static bool IsBridgeConfiguredAt(string settingsPath)
+    {
+        try
+        {
+            if (!File.Exists(settingsPath)) return false;
+            var raw = File.ReadAllText(settingsPath);
+            if (string.IsNullOrWhiteSpace(raw)) return false;
+
+            var root = JsonNode.Parse(raw) as JsonObject;
+            if (root?["statusLine"] is not JsonObject statusLine) return false;
+            if (statusLine["enabled"]?.GetValue<bool>() == false) return false;
+
+            var command = statusLine["command"]?.GetValue<string>();
+            return !string.IsNullOrWhiteSpace(command) && IsManagedCommand(command);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public static BridgeSetupResult ConfigureCliSettings(string executablePath, out string? existingCommand) =>
         ConfigureCliSettingsAt(GetCliSettingsPath(), executablePath, out existingCommand, GetBridgeShimPath());
 

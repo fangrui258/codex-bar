@@ -5,6 +5,8 @@ namespace CodexBar;
 
 internal static class AntigravityUsageParser
 {
+    private static readonly DateTimeOffset MinimumValidResetTime = new(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
     public static ProviderSnapshot Parse(JsonElement root, DateTimeOffset observedAt)
     {
         if (root.ValueKind != JsonValueKind.Object)
@@ -107,7 +109,7 @@ internal static class AntigravityUsageParser
         DateTimeOffset? resetsAt = null;
         if (TryGetResetTime(value, out var parsedReset))
             resetsAt = parsedReset;
-        else if (TryGetDouble(value, out var resetSeconds, "reset_in_seconds", "resetInSeconds") && resetSeconds >= 0)
+        else if (TryGetDouble(value, out var resetSeconds, "reset_in_seconds", "resetInSeconds") && resetSeconds > 0)
             resetsAt = observedAt.AddSeconds(resetSeconds);
 
         lane = new QuotaLane(
@@ -131,7 +133,8 @@ internal static class AntigravityUsageParser
         {
             var text = prop.GetString();
             if (!string.IsNullOrWhiteSpace(text) &&
-                DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out resetsAt))
+                DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out resetsAt) &&
+                resetsAt >= MinimumValidResetTime)
                 return true;
         }
         else if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt64(out var unixSeconds))
@@ -139,11 +142,13 @@ internal static class AntigravityUsageParser
             try
             {
                 resetsAt = DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
-                return true;
+                if (resetsAt >= MinimumValidResetTime)
+                    return true;
             }
             catch (ArgumentOutOfRangeException) { }
         }
 
+        resetsAt = default;
         return false;
     }
 

@@ -17,7 +17,10 @@ var tests = new (string Name, Func<Task> Run)[]
     ("returns Antigravity standby when client is not running", ReturnsAntigravityStandbyWhenStopped),
     ("reads Antigravity live file and detects account switches when running", ReadsAntigravityLiveFileAndAccountSwitch),
     ("writes Antigravity statusLine bridge safely and respects custom scripts", Sync(ConfiguresAndPreservesAntigravityCliSettings)),
-    ("migrates legacy Codex notification state into multi-provider settings", Sync(MigratesLegacyNotificationSettings))
+    ("migrates legacy Codex notification state into multi-provider settings", Sync(MigratesLegacyNotificationSettings)),
+    ("ignores epoch placeholder reset_time and zero reset_in_seconds", Sync(IgnoresEpochPlaceholderResetTimes)),
+    ("distinguishes desktop standby and stale expired snapshots", DistinguishesDesktopStandbyAndStaleExpiredSnapshots),
+    ("reports Antigravity CLI bridge readiness from settings.json", Sync(DetectsBridgeConfigurationReadiness))
 };
 
 var failures = 0;
@@ -312,7 +315,8 @@ static async Task ReadsAntigravityLiveFileAndAccountSwitch()
     try
     {
         var statusPath = Path.Combine(directory, "antigravity-status.json");
-        using var provider = new AntigravityUsageProvider(statusPath, () => true);
+        var fixedNow = DateTimeOffset.Parse("2026-11-26T22:00:00Z", CultureInfo.InvariantCulture);
+        using var provider = new AntigravityUsageProvider(statusPath, () => true, () => false, () => fixedNow);
 
         var missing = await provider.ReadUsageAsync();
         Equal(ProviderStatus.Offline, missing.Status, "offline before bridge writes");
@@ -413,6 +417,98 @@ static void MigratesLegacyNotificationSettings()
     }
 }
 
+static void IgnoresEpochPlaceholderResetTimes()
+{
+    using var doc = JsonDocument.Parse("""
+        {
+          "quota": {
+            "3p-5h": {
+              "remaining_fraction": 1,
+              "reset_time": "1970-01-01T00:00:00Z",
+              "reset_in_seconds": 0
+            },
+            "gemini-5h": {
+              "remaining_fraction": 0.92,
+              "reset_time": "2026-11-27T08:00:00Z"
+            }
+          }
+        }
+        """);
+
+    var snapshot = AntigravityUsageParser.Parse(doc.RootElement, DateTimeOffset.Parse("2026-11-27T04:00:00Z", CultureInfo.InvariantCulture));
+    Equal(2, snapshot.Lanes.Count, "lane count");
+    Equal<DateTimeOffset?>(null, snapshot.Lanes[0].ResetsAt, "epoch placeholder ignored");
+    Equal(DateTimeOffset.Parse("2026-11-27T08:00:00Z", CultureInfo.InvariantCulture), snapshot.Lanes[1].ResetsAt, "valid reset kept");
+}
+
+static async Task DistinguishesDesktopStandbyAndStaleExpiredSnapshots()
+{
+    var directory = Path.Combine(Path.GetTempPath(), $"codexbar-agystale-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(directory);
+    try
+    {
+        var statusPath = Path.Combine(directory, "antigravity-status.json");
+        File.WriteAllText(statusPath, """
+            {
+              "email": "dev@example.com",
+              "quota": {
+                "gemini-5h": {
+                  "remaining_fraction": 0.92,
+                  "reset_time": "2026-11-26T17:04:13Z"
+                }
+              }
+            }
+            """);
+        File.SetLastWriteTimeUtc(statusPath, DateTime.SpecifyKind(DateTime.Parse("2026-11-26T12:57:05Z", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal), DateTimeKind.Utc));
+
+        using var desktopOnlyProvider = new AntigravityUsageProvider(
+            statusPath,
+            isAgyRunning: () => false,
+            isDesktopRunning: () => true,
+            utcNowProvider: () => DateTimeOffset.Parse("2026-11-27T02:28:00Z", CultureInfo.InvariantCulture));
+        var desktopOnlySnapshot = await desktopOnlyProvider.ReadUsageAsync();
+        Equal(ProviderStatus.Standby, desktopOnlySnapshot.Status, "desktop-only standby");
+        Equal(0, desktopOnlySnapshot.Lanes.Count, "no stale lanes when agy stopped");
+        if (desktopOnlySnapshot.StatusMessage?.Contains("agy", StringComparison.OrdinalIgnoreCase) != true)
+            throw new InvalidOperationException("Expected status message to guide running agy CLI.");
+
+        using var staleAgyProvider = new AntigravityUsageProvider(
+            statusPath,
+            isAgyRunning: () => true,
+            isDesktopRunning: () => true,
+            utcNowProvider: () => DateTimeOffset.Parse("2026-11-27T02:28:00Z", CultureInfo.InvariantCulture));
+        var staleSnapshot = await staleAgyProvider.ReadUsageAsync();
+        Equal(ProviderStatus.Standby, staleSnapshot.Status, "stale expired snapshot rejected");
+        Equal(0, staleSnapshot.Lanes.Count, "no expired lanes displayed");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static void DetectsBridgeConfigurationReadiness()
+{
+    var directory = Path.Combine(Path.GetTempPath(), $"codexbar-agyready-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(directory);
+    try
+    {
+        var settingsPath = Path.Combine(directory, "settings.json");
+        var shimPath = Path.Combine(directory, "codexbar-antigravity-statusline.cmd");
+        Equal(false, AntigravityStatusBridge.IsBridgeConfiguredAt(settingsPath), "unconfigured when missing");
+
+        AntigravityStatusBridge.ConfigureCliSettingsAt(settingsPath, @"C:\Tools\CodexBar.exe", out _, shimPath);
+        Equal(true, AntigravityStatusBridge.IsBridgeConfiguredAt(settingsPath), "configured after setup");
+
+        File.WriteAllText(settingsPath, """{"statusLine":{"type":"command","command":"other-script.cmd","enabled":true}}""");
+        Equal(false, AntigravityStatusBridge.IsBridgeConfiguredAt(settingsPath), "not managed when custom script");
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
 static void SaveVisualSnapshot(string path)
 {
     CultureInfo.DefaultThreadCurrentCulture = CultureInfo.GetCultureInfo("en-US");
@@ -433,9 +529,9 @@ static void SaveVisualSnapshot(string path)
         ProviderStatus.Online,
         new[]
         {
-            new QuotaLane("gemini-pro", "GEMINI PRO LEFT", 18, now.AddHours(3.5)),
-            new QuotaLane("gemini-flash", "GEMINI FLASH LEFT", 6, now.AddHours(3.5)),
-            new QuotaLane("claude", "CLAUDE LEFT", 55, now.AddDays(2))
+            new QuotaLane("3p-5h", "3P 5H LEFT", 0, null),
+            new QuotaLane("gemini-5h", "GEMINI 5H LEFT", 3, now.AddHours(3.25)),
+            new QuotaLane("gemini-weekly", "GEMINI WEEKLY LEFT", 10, now.AddDays(6.2))
         },
         now);
 
@@ -446,7 +542,7 @@ static void SaveVisualSnapshot(string path)
         ProviderStatus.Standby,
         Array.Empty<QuotaLane>(),
         now,
-        "Antigravity standby (not running)");
+        "Desktop open · run agy CLI to sync");
 
     var outputDirectory = Path.GetDirectoryName(Path.GetFullPath(path))!;
     Directory.CreateDirectory(outputDirectory);

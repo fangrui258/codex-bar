@@ -4,6 +4,15 @@ All notable changes to CodexBar are documented here.
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-11-27
+
+### Fixed
+
+- Ignores placeholder `1970-01-01T00:00:00Z` reset timestamps and zero `reset_in_seconds` values on untouched Antigravity quota pools, displaying `Full capacity` instead of `Resets Thu, Jan 1`.
+- Distinguishes `agy` CLI from the desktop `Antigravity` app when checking live `statusLine` sync availability, and marks stale snapshots with elapsed reset windows as standby/refreshing rather than showing stale numbers as live.
+- Detects whether the `agy` CLI bridge is already configured so standby/offline setup hints accurately tell the user to run `agy` when the bridge is ready.
+- Gives wrapped localized reset dates extra vertical clearance above each progress bar.
+
 ## [1.3.1] - 2026-11-26
 
 ### Fixed
@@ -79,7 +88,8 @@ All notable changes to CodexBar are documented here.
 - Live weekly Codex capacity and reset-time display.
 - Configurable refresh interval, transparency, always-on-top mode, Windows startup, and notification-area support.
 
-[Unreleased]: https://github.com/fangrui258/codex-bar/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/fangrui258/codex-bar/compare/v1.3.2...HEAD
+[1.3.2]: https://github.com/fangrui258/codex-bar/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/fangrui258/codex-bar/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/fangrui258/codex-bar/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/fangrui258/codex-bar/compare/v1.2.0...v1.2.1
