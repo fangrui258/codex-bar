@@ -208,82 +208,48 @@ internal sealed class AntigravityUsageProvider : IUsageProvider
             "CodexBar");
         Directory.CreateDirectory(workingDir);
 
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = executable,
-            WorkingDirectory = workingDir,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-            CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden
-        };
-        startInfo.ArgumentList.Add("-p");
-        startInfo.ArgumentList.Add("/usage");
-        startInfo.ArgumentList.Add("--output-format");
-        startInfo.ArgumentList.Add("json");
-        startInfo.ArgumentList.Add("--print-timeout");
-        startInfo.ArgumentList.Add("15s");
-
-        using var process = new Process { StartInfo = startInfo };
-        if (!process.Start())
-            throw new InvalidOperationException("Could not start agy CLI.");
-
-        Interlocked.Exchange(ref activeCliPollProcessId, process.Id);
+        var startedPid = 0;
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeoutCts.CancelAfter(CliCommandTimeout);
 
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-            var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+            var result = await HiddenDesktopProcessRunner.RunAsync(
+                executable,
+                new[] { "-p", "/usage", "--output-format", "json", "--print-timeout", "15s" },
+                workingDir,
+                pid =>
+                {
+                    startedPid = pid;
+                    Interlocked.Exchange(ref activeCliPollProcessId, pid);
+                },
+                timeoutCts.Token);
 
-            await process.WaitForExitAsync(timeoutCts.Token);
-            var stdout = await stdoutTask;
-            var stderr = await stderrTask;
-
-            if (process.ExitCode != 0)
+            if (result.ExitCode != 0)
             {
-                var detail = string.IsNullOrWhiteSpace(stderr) ? $"exit code {process.ExitCode}" : stderr.Trim();
+                var detail = string.IsNullOrWhiteSpace(result.StandardError)
+                    ? $"exit code {result.ExitCode}"
+                    : result.StandardError.Trim();
                 if (detail.Contains("not logged", StringComparison.OrdinalIgnoreCase) ||
                     detail.Contains("login", StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("Run agy once to sign in");
                 throw new InvalidOperationException("agy CLI quota request failed");
             }
 
-            if (string.IsNullOrWhiteSpace(stdout))
+            if (string.IsNullOrWhiteSpace(result.StandardOutput))
                 throw new InvalidOperationException("agy CLI returned no output");
 
-            using var doc = JsonDocument.Parse(stdout);
+            using var doc = JsonDocument.Parse(result.StandardOutput);
             return AntigravityUsageParser.Parse(doc.RootElement, utcNowProvider());
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            TryKillProcessTree(process);
             throw new InvalidOperationException("agy CLI quota request timed out");
-        }
-        catch
-        {
-            TryKillProcessTree(process);
-            throw;
         }
         finally
         {
-            Interlocked.CompareExchange(ref activeCliPollProcessId, 0, process.Id);
-        }
-    }
-
-    private static void TryKillProcessTree(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-                process.Kill(entireProcessTree: true);
-        }
-        catch
-        {
+            if (startedPid > 0)
+                Interlocked.CompareExchange(ref activeCliPollProcessId, 0, startedPid);
         }
     }
 

@@ -23,7 +23,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("reports Antigravity CLI bridge readiness from settings.json", Sync(DetectsBridgeConfigurationReadiness)),
     ("parses agy -p /usage JSON groups and buckets", Sync(ParsesAgyPrintUsageJson)),
     ("rejects non-SUCCESS agy -p /usage status", Sync(RejectsNonSuccessAgyPrintJson)),
-    ("polls agy CLI automatically when desktop app is running and caches interval", PollsCliAutomaticallyWhenDesktopRunningAndRespectsCache)
+    ("polls agy CLI automatically when desktop app is running and caches interval", PollsCliAutomaticallyWhenDesktopRunningAndRespectsCache),
+    ("runs console commands inside an isolated hidden Win32 desktop", RunsConsoleCommandOnHiddenDesktop)
 };
 
 var failures = 0;
@@ -616,6 +617,26 @@ static async Task PollsCliAutomaticallyWhenDesktopRunningAndRespectsCache()
     var standby = await provider.ReadUsageAsync(forceRefresh: false);
     Equal(ProviderStatus.Standby, standby.Status, "standby when desktop closes");
     Equal(2, fetchCount, "no CLI poll in standby");
+}
+
+static async Task RunsConsoleCommandOnHiddenDesktop()
+{
+    var cmdExe = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+    var result = await HiddenDesktopProcessRunner.RunAsync(
+        cmdExe,
+        new[] { "/c", "echo hidden-desktop-ok" },
+        Path.GetTempPath(),
+        onProcessStarted: null,
+        CancellationToken.None);
+
+    Equal(0, result.ExitCode, "hidden desktop cmd exit code");
+    if (!result.StandardOutput.Contains("hidden-desktop-ok", StringComparison.Ordinal))
+        throw new InvalidOperationException($"Unexpected stdout: {result.StandardOutput}");
+
+    var commandLine = HiddenDesktopProcessRunner.BuildCommandLine(
+        @"C:\Path With Spaces\agy.exe",
+        new[] { "-p", "/usage", "--output-format", "json" });
+    Equal("\"C:\\Path With Spaces\\agy.exe\" -p /usage --output-format json", commandLine, "command line quoting");
 }
 
 static void SaveVisualSnapshot(string path)

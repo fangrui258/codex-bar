@@ -4,6 +4,12 @@ All notable changes to CodexBar are documented here.
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-11-27
+
+### Fixed
+
+- Runs background `agy -p "/usage"` queries inside an isolated hidden Win32 desktop (`HiddenDesktopProcessRunner` via `CreateDesktop`), preventing `agy`'s periodic 15-minute `auto_updater` child process from flashing a black `ConsoleWindowClass` window on the user's desktop.
+
 ## [1.4.0] - 2026-11-27
 
 ### Added
@@ -96,7 +102,8 @@ All notable changes to CodexBar are documented here.
 - Live weekly Codex capacity and reset-time display.
 - Configurable refresh interval, transparency, always-on-top mode, Windows startup, and notification-area support.
 
-[Unreleased]: https://github.com/fangrui258/codex-bar/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/fangrui258/codex-bar/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/fangrui258/codex-bar/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/fangrui258/codex-bar/compare/v1.3.2...v1.4.0
 [1.3.2]: https://github.com/fangrui258/codex-bar/compare/v1.3.1...v1.3.2
 [1.3.1]: https://github.com/fangrui258/codex-bar/compare/v1.3.0...v1.3.1
